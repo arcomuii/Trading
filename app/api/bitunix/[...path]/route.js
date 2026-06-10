@@ -22,7 +22,7 @@ export async function GET(request, { params }) {
 
   const digest    = createHash('sha256').update(nonce + timestamp + BITUNIX_API_KEY + queryParams + body).digest('hex')
   const signature = createHash('sha256').update(digest + BITUNIX_SECRET).digest('hex')
-
+ 
   const base      = targetPath.startsWith('/api/spot/') ? BITUNIX_SPOT_BASE : BITUNIX_FUTURES_BASE
   const targetUrl = `${base}${targetPath}${url.search}`
 
