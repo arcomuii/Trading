@@ -30,7 +30,7 @@ export async function GET(request, { params }) {
     const upstream = await fetch(targetUrl, {
       headers: {
         'api-key'     : BITUNIX_API_KEY,
-        'sign'        : signature,
+        'sign'        : signature, 
         'nonce'       : nonce,
         'timestamp'   : timestamp,
         'Content-Type': 'application/json',
