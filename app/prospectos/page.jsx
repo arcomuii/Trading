@@ -34,12 +34,12 @@ function nextSlotTime() {
 
 // ─── Firebase ─────────────────────────────────────────────────────────────────
 const FB_CONFIG = {
-    apiKey:            "AIzaSyBGtZ5lkmcNN7YjVkPnSo4W0mCRpcabwu8",
-    authDomain:        "trading-5c2a1.firebaseapp.com",
-    projectId:         "trading-5c2a1",
-    storageBucket:     "trading-5c2a1.firebasestorage.app",
-    messagingSenderId: "747427365340",
-    appId:             "1:747427365340:web:2f8141a8188ab0bb438f19",
+    apiKey:            process.env.NEXT_PUBLIC_FB_API_KEY,
+    authDomain:        process.env.NEXT_PUBLIC_FB_AUTH_DOMAIN,
+    projectId:         process.env.NEXT_PUBLIC_FB_PROJECT_ID,
+    storageBucket:     process.env.NEXT_PUBLIC_FB_STORAGE_BUCKET,
+    messagingSenderId: process.env.NEXT_PUBLIC_FB_MESSAGING_SENDER_ID,
+    appId:             process.env.NEXT_PUBLIC_FB_APP_ID,
 };
 
 // Solicita permiso de notificaciones al usuario

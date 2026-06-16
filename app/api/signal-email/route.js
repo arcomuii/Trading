@@ -14,8 +14,8 @@ export async function POST(request) {
             port:   465,
             secure: true,
             auth: {
-                user: process.env.SMTP_USER || 'arcomuii@gmail.com',
-                pass: process.env.SMTP_PASS || 'rlqnxrnzgkbbosic',
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS,
             },
             tls: { rejectUnauthorized: false },
         });
@@ -118,8 +118,8 @@ export async function POST(request) {
 </html>`;
 
         await transporter.sendMail({
-            from:    `"Trading Signals" <arcomuii@gmail.com>`,
-            to:      'arcomuii@hotmail.com, arcomuii@gmail.com, arcomuii@proton.me',
+            from:    `"Trading Signals" <${process.env.SMTP_USER}>`,
+            to:      process.env.SMTP_TO || process.env.SMTP_USER,
             subject: `${emoji} ${direction} · ${symbol.toUpperCase()} — Señal confirmada de entrada`,
             html,
         });
