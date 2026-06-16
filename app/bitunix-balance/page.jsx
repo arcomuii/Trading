@@ -7,12 +7,12 @@ function fmt(value, decimals = 2) {
     return num.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-function MetricCard({ label, value, sub, color = "text-gray-800" }) {
+function MetricCard({ label, value, sub, color = "text-gray-800 dark:text-slate-100" }) {
     return (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">{label}</p>
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-2">{label}</p>
             <p className={`text-2xl font-black font-mono ${color}`}>{value}</p>
-            {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+            {sub && <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">{sub}</p>}
         </div>
     );
 }
@@ -20,7 +20,6 @@ function MetricCard({ label, value, sub, color = "text-gray-800" }) {
 function extractAccount(json) {
     if (!json) return null;
     const d = json.data ?? json.result ?? json;
-    // El endpoint devuelve un array; tomamos el primer elemento
     return Array.isArray(d) ? d[0] ?? null : d;
 }
 
@@ -67,15 +66,19 @@ export default function BitunixBalancePage() {
     const posMode    = account?.positionMode;
 
     const totalPnl    = parseFloat(crossPnl ?? 0) + parseFloat(isoPnl ?? 0);
-    const pnlColor    = totalPnl > 0 ? "text-green-600" : totalPnl < 0 ? "text-red-500" : "text-gray-800";
+    const pnlColor    = totalPnl > 0
+        ? "text-green-600 dark:text-green-400"
+        : totalPnl < 0
+            ? "text-red-500 dark:text-red-400"
+            : "text-gray-800 dark:text-slate-100";
     const hasKnownFields = available !== undefined;
 
     return (
-        <div className="min-h-screen bg-gray-50 py-10 px-6">
+        <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-6">
             <div className="max-w-4xl mx-auto">
                 <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-800">Balance Futures</h1>
-                    <p className="text-gray-400 text-sm mt-1">
+                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Balance Futures</h1>
+                    <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
                         Bitunix · actualiza cada 10 min
                         {lastUpdate && (
                             <span> · última vez: {lastUpdate.toLocaleTimeString("es-MX")}</span>
@@ -84,19 +87,19 @@ export default function BitunixBalancePage() {
                 </div>
 
                 {loading && (
-                    <div className="flex items-center justify-center h-64 text-gray-400 text-lg">
+                    <div className="flex items-center justify-center h-64 text-gray-400 dark:text-slate-500 text-lg">
                         Cargando balance...
                     </div>
                 )}
 
                 {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-red-700">
+                    <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-2xl p-6 text-red-700 dark:text-red-300">
                         <p className="font-semibold mb-1">Error al obtener el balance</p>
                         <p className="text-sm font-mono">{error}</p>
                         {rawData && (
                             <details className="mt-4">
-                                <summary className="cursor-pointer text-sm text-red-500 hover:text-red-700">Ver respuesta raw</summary>
-                                <pre className="mt-2 text-xs bg-red-100 rounded p-3 overflow-auto max-h-64">
+                                <summary className="cursor-pointer text-sm text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300">Ver respuesta raw</summary>
+                                <pre className="mt-2 text-xs bg-red-100 dark:bg-red-900 rounded p-3 overflow-auto max-h-64">
                                     {JSON.stringify(rawData, null, 2)}
                                 </pre>
                             </details>
@@ -106,20 +109,23 @@ export default function BitunixBalancePage() {
 
                 {!loading && !error && account && hasKnownFields && (
                     <>
-                        {/* Total equity card */}
                         {(() => {
-                            const total     = parseFloat(available ?? 0) + parseFloat(margin ?? 0) + totalPnl;
-                            const totalColor = totalPnl > 0 ? "text-green-600" : totalPnl < 0 ? "text-red-500" : "text-gray-800";
+                            const total      = parseFloat(available ?? 0) + parseFloat(margin ?? 0) + totalPnl;
+                            const totalColor = totalPnl > 0
+                                ? "text-green-600 dark:text-green-400"
+                                : totalPnl < 0
+                                    ? "text-red-500 dark:text-red-400"
+                                    : "text-gray-800 dark:text-slate-100";
                             return (
                                 <div className="flex justify-center mb-6">
-                                    <div className="bg-white rounded-2xl border border-gray-100 shadow-lg px-10 py-6 text-center min-w-64">
-                                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">
+                                    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-lg px-10 py-6 text-center min-w-64">
+                                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-2">
                                             Equity total
                                         </p>
                                         <p className={`text-4xl font-black font-mono ${totalColor}`}>
                                             {fmt(total)} {coin}
                                         </p>
-                                        <p className="text-xs text-gray-400 mt-2">
+                                        <p className="text-xs text-gray-400 dark:text-slate-500 mt-2">
                                             Disponible + Margen en uso + PnL no realizado
                                         </p>
                                     </div>
@@ -128,7 +134,7 @@ export default function BitunixBalancePage() {
                         })()}
 
                         {posMode && (
-                            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">
+                            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-4">
                                 Modo: {posMode}
                             </p>
                         )}
@@ -152,13 +158,13 @@ export default function BitunixBalancePage() {
                                 label="PnL no realizado (Cross)"
                                 value={`${parseFloat(crossPnl ?? 0) >= 0 ? "+" : ""}${fmt(crossPnl)} ${coin}`}
                                 sub="Posiciones cross abiertas"
-                                color={parseFloat(crossPnl ?? 0) >= 0 ? "text-green-600" : "text-red-500"}
+                                color={parseFloat(crossPnl ?? 0) >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}
                             />
                             <MetricCard
                                 label="PnL no realizado (Aislado)"
                                 value={`${parseFloat(isoPnl ?? 0) >= 0 ? "+" : ""}${fmt(isoPnl)} ${coin}`}
                                 sub="Posiciones aisladas abiertas"
-                                color={parseFloat(isoPnl ?? 0) >= 0 ? "text-green-600" : "text-red-500"}
+                                color={parseFloat(isoPnl ?? 0) >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}
                             />
                             <MetricCard
                                 label="Transferible"
@@ -177,9 +183,9 @@ export default function BitunixBalancePage() {
                 )}
 
                 {!loading && !error && account && !hasKnownFields && (
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-6">
-                        <p className="font-semibold text-yellow-800 mb-2">Respuesta recibida — campos no reconocidos</p>
-                        <pre className="text-xs bg-yellow-100 rounded p-3 overflow-auto max-h-96">
+                    <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-2xl p-6">
+                        <p className="font-semibold text-yellow-800 dark:text-yellow-300 mb-2">Respuesta recibida — campos no reconocidos</p>
+                        <pre className="text-xs bg-yellow-100 dark:bg-yellow-900 rounded p-3 overflow-auto max-h-96 text-yellow-800 dark:text-yellow-300">
                             {JSON.stringify(rawData, null, 2)}
                         </pre>
                     </div>

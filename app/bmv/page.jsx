@@ -63,8 +63,8 @@ function PriceChart({ data, color = "#4f46e5", id = "chart" }) {
     const area = `${path} L ${W - P},${H} L ${P},${H} Z`;
 
     return (
-        <div className="mt-5 pt-4 border-t border-gray-100">
-            <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-3">
+        <div className="mt-5 pt-4 border-t border-gray-100 dark:border-slate-800">
+            <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-3">
                 <span>Inicio del día</span>
                 <span>Precio (5m)</span>
                 <span>Ahora</span>
@@ -102,53 +102,53 @@ function PortfolioSection({ symbol, currentPrice, portfolio, onChange }) {
     }
 
     return (
-        <div className="mt-5 pt-4 border-t border-gray-100">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-3">Mi posición</p>
+        <div className="mt-5 pt-4 border-t border-gray-100 dark:border-slate-800">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-3">Mi posición</p>
 
             <div className="flex gap-2 mb-3">
                 <div className="flex-1">
-                    <label className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider block mb-1">Acciones</label>
+                    <label className="text-[10px] text-gray-400 dark:text-slate-500 font-semibold uppercase tracking-wider block mb-1">Acciones</label>
                     <input
                         type="number" min="0" placeholder="0"
                         value={entry.qty}
                         onChange={e => update("qty", e.target.value)}
-                        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-gray-50"
+                        className="w-full border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:focus:ring-indigo-800 bg-gray-50 dark:bg-slate-800 text-gray-800 dark:text-slate-100"
                     />
                 </div>
                 <div className="flex-1">
-                    <label className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider block mb-1">Precio compra (MXN)</label>
+                    <label className="text-[10px] text-gray-400 dark:text-slate-500 font-semibold uppercase tracking-wider block mb-1">Precio compra (MXN)</label>
                     <input
                         type="number" min="0" step="0.01" placeholder="0.00"
                         value={entry.buyPrice}
                         onChange={e => update("buyPrice", e.target.value)}
-                        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-gray-50"
+                        className="w-full border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:focus:ring-indigo-800 bg-gray-50 dark:bg-slate-800 text-gray-800 dark:text-slate-100"
                     />
                 </div>
             </div>
 
             {hasPL && (
-                <div className={`rounded-xl p-3 ${isGain ? "bg-green-50 border border-green-100" : "bg-red-50 border border-red-100"}`}>
+                <div className={`rounded-xl p-3 ${isGain ? "bg-green-50 dark:bg-green-950 border border-green-100 dark:border-green-900" : "bg-red-50 dark:bg-red-950 border border-red-100 dark:border-red-900"}`}>
                     <div className="flex justify-between items-start">
                         <div>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-0.5">Ganancia / Pérdida</p>
-                            <p className={`text-xl font-black ${isGain ? "text-green-600" : "text-red-500"}`}>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-0.5">Ganancia / Pérdida</p>
+                            <p className={`text-xl font-black ${isGain ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
                                 {isGain ? "+" : ""}{mxn(pl)}
                             </p>
-                            <p className={`text-xs font-semibold mt-0.5 ${isGain ? "text-green-500" : "text-red-400"}`}>
+                            <p className={`text-xs font-semibold mt-0.5 ${isGain ? "text-green-500 dark:text-green-400" : "text-red-400 dark:text-red-400"}`}>
                                 {pct(plPct)}
                             </p>
                         </div>
                         <div className="text-right">
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-0.5">Valor actual</p>
-                            <p className="text-sm font-semibold text-gray-700">{mxn(curVal)}</p>
-                            <p className="text-[11px] text-gray-400">Invertido: {mxn(invested)}</p>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-0.5">Valor actual</p>
+                            <p className="text-sm font-semibold text-gray-700 dark:text-slate-200">{mxn(curVal)}</p>
+                            <p className="text-[11px] text-gray-400 dark:text-slate-500">Invertido: {mxn(invested)}</p>
                         </div>
                     </div>
                 </div>
             )}
 
             {!hasPL && (entry.qty || entry.buyPrice) && (
-                <p className="text-xs text-gray-400 text-center">Completa acciones y precio de compra para ver P&L</p>
+                <p className="text-xs text-gray-400 dark:text-slate-500 text-center">Completa acciones y precio de compra para ver P&L</p>
             )}
         </div>
     );
@@ -163,21 +163,21 @@ function StockCard({ stock, meta, history, portfolio, onPortfolioChange, onRemov
 
     if (!stock) {
         return (
-            <div className="bg-white rounded-2xl shadow border border-red-100 p-7 flex flex-col">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow border border-red-100 dark:border-red-900 p-7 flex flex-col">
                 <div className="flex items-start justify-between mb-4">
                     <div>
-                        <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">{meta.label}</h2>
+                        <h2 className="text-xs font-bold text-gray-400 dark:text-slate-500 uppercase tracking-widest">{meta.label}</h2>
                         <p className="text-sm text-red-400 mt-1">Símbolo no encontrado</p>
                     </div>
                     {onRemove && (
                         <button onClick={onRemove}
-                            className="text-gray-300 hover:text-red-400 transition-colors ml-2"
+                            className="text-gray-300 dark:text-slate-600 hover:text-red-400 transition-colors ml-2"
                             title="Eliminar">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                     )}
                 </div>
-                <p className="text-xs text-gray-400">Verifica que el ticker sea válido en Yahoo Finance (ej. GENTERA.MX)</p>
+                <p className="text-xs text-gray-400 dark:text-slate-500">Verifica que el ticker sea válido en Yahoo Finance (ej. GENTERA.MX)</p>
             </div>
         );
     }
@@ -185,19 +185,19 @@ function StockCard({ stock, meta, history, portfolio, onPortfolioChange, onRemov
     const displayName = meta.name || stock.shortName || meta.label;
 
     return (
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-7 flex flex-col">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-gray-100 dark:border-slate-800 p-7 flex flex-col">
             <div className="flex items-start justify-between mb-5">
                 <div>
-                    <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">{meta.label}</h2>
-                    <p className="text-base font-semibold text-gray-700 mt-0.5">{displayName}</p>
+                    <h2 className="text-xs font-bold text-gray-400 dark:text-slate-500 uppercase tracking-widest">{meta.label}</h2>
+                    <p className="text-base font-semibold text-gray-700 dark:text-slate-200 mt-0.5">{displayName}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${pos ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${pos ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400" : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"}`}>
                         {pct(change)}
                     </span>
                     {onRemove && (
                         <button onClick={onRemove}
-                            className="text-gray-300 hover:text-red-400 transition-colors"
+                            className="text-gray-300 dark:text-slate-600 hover:text-red-400 transition-colors"
                             title="Eliminar acción">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
@@ -205,10 +205,10 @@ function StockCard({ stock, meta, history, portfolio, onPortfolioChange, onRemov
                 </div>
             </div>
 
-            <p className={`text-4xl font-black ${pos ? "text-green-600" : "text-red-500"}`}>
+            <p className={`text-4xl font-black ${pos ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
                 {mxn(price)}
             </p>
-            <p className={`text-sm font-semibold mt-1 ${pos ? "text-green-500" : "text-red-400"}`}>
+            <p className={`text-sm font-semibold mt-1 ${pos ? "text-green-500 dark:text-green-400" : "text-red-400 dark:text-red-400"}`}>
                 {pos ? "+" : ""}{mxn(stock.regularMarketChange ?? 0)} hoy
             </p>
 
@@ -267,7 +267,7 @@ function AddStockForm({ existing, onAdd }) {
         return (
             <button
                 onClick={() => setOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-dashed border-gray-300 text-gray-400 text-sm font-medium hover:border-indigo-300 hover:text-indigo-500 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-dashed border-gray-300 dark:border-slate-700 text-gray-400 dark:text-slate-500 text-sm font-medium hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors"
             >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 Agregar acción
@@ -284,10 +284,10 @@ function AddStockForm({ existing, onAdd }) {
                     placeholder="Ej. GENTERA, AMXL, WALMEX"
                     value={ticker}
                     onChange={e => { setTicker(e.target.value); setErr(""); }}
-                    className="border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white shadow-sm w-56"
+                    className="border border-gray-200 dark:border-slate-700 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-700 bg-white dark:bg-slate-900 dark:text-slate-100 shadow-sm w-56"
                 />
                 {err && <p className="text-xs text-red-400 mt-1">{err}</p>}
-                <p className="text-[11px] text-gray-400 mt-1">Se agrega .MX automáticamente</p>
+                <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">Se agrega .MX automáticamente</p>
             </div>
             <button
                 type="submit"
@@ -299,7 +299,7 @@ function AddStockForm({ existing, onAdd }) {
             <button
                 type="button"
                 onClick={() => { setOpen(false); setTicker(""); setErr(""); }}
-                className="px-3 py-2 rounded-xl border border-gray-200 text-gray-400 text-sm hover:bg-gray-50 transition-colors"
+                className="px-3 py-2 rounded-xl border border-gray-200 dark:border-slate-700 text-gray-400 dark:text-slate-500 text-sm hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
             >
                 Cancelar
             </button>
@@ -333,23 +333,23 @@ function TotalSummary({ stockMap, allMeta, portfolio }) {
     const isGain        = totalPL >= 0;
 
     return (
-        <div className={`rounded-2xl border p-6 mb-6 ${isGain ? "bg-green-50 border-green-100" : "bg-red-50 border-red-100"}`}>
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Resumen de portafolio</p>
+        <div className={`rounded-2xl border p-6 mb-6 ${isGain ? "bg-green-50 dark:bg-green-950 border-green-100 dark:border-green-900" : "bg-red-50 dark:bg-red-950 border-red-100 dark:border-red-900"}`}>
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-3">Resumen de portafolio</p>
             <div className="flex flex-wrap gap-8">
                 <div>
-                    <p className="text-xs text-gray-400 mb-0.5">Total invertido</p>
-                    <p className="text-lg font-bold text-gray-700">{mxn(totalInvested)}</p>
+                    <p className="text-xs text-gray-400 dark:text-slate-500 mb-0.5">Total invertido</p>
+                    <p className="text-lg font-bold text-gray-700 dark:text-slate-200">{mxn(totalInvested)}</p>
                 </div>
                 <div>
-                    <p className="text-xs text-gray-400 mb-0.5">Valor actual</p>
-                    <p className="text-lg font-bold text-gray-700">{mxn(totalCurVal)}</p>
+                    <p className="text-xs text-gray-400 dark:text-slate-500 mb-0.5">Valor actual</p>
+                    <p className="text-lg font-bold text-gray-700 dark:text-slate-200">{mxn(totalCurVal)}</p>
                 </div>
                 <div>
-                    <p className="text-xs text-gray-400 mb-0.5">Ganancia / Pérdida</p>
-                    <p className={`text-2xl font-black ${isGain ? "text-green-600" : "text-red-500"}`}>
+                    <p className="text-xs text-gray-400 dark:text-slate-500 mb-0.5">Ganancia / Pérdida</p>
+                    <p className={`text-2xl font-black ${isGain ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
                         {isGain ? "+" : ""}{mxn(totalPL)}
                     </p>
-                    <p className={`text-xs font-semibold ${isGain ? "text-green-500" : "text-red-400"}`}>
+                    <p className={`text-xs font-semibold ${isGain ? "text-green-500 dark:text-green-400" : "text-red-400 dark:text-red-400"}`}>
                         {pct(totalPLPct)}
                     </p>
                 </div>
@@ -436,13 +436,13 @@ export default function BMVPage() {
     }
 
     return (
-        <div className="min-h-screen bg-gray-50 py-10 px-6">
+        <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-6">
             <div className="max-w-6xl mx-auto">
                 {/* Header */}
                 <div className="flex items-start justify-between flex-wrap gap-4 mb-6">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-800">BMV · Bolsa Mexicana de Valores</h1>
-                        <p className="text-gray-400 text-sm mt-1">
+                        <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">BMV · Bolsa Mexicana de Valores</h1>
+                        <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
                             Precios en MXN · actualiza cada 10 min
                             {lastUpdate && <span> · {lastUpdate.toLocaleTimeString("es-MX")}</span>}
                         </p>
@@ -459,13 +459,13 @@ export default function BMVPage() {
                 )}
 
                 {loading && (
-                    <div className="flex items-center justify-center h-64 text-gray-400 text-lg">
+                    <div className="flex items-center justify-center h-64 text-gray-400 dark:text-slate-500 text-lg">
                         Cargando acciones BMV...
                     </div>
                 )}
 
                 {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-red-700">
+                    <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-2xl p-6 text-red-700 dark:text-red-300">
                         <p className="font-semibold mb-1">Error al obtener datos</p>
                         <p className="text-sm font-mono">{error}</p>
                     </div>

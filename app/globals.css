@@ -1,3 +1,20 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* CSS variables for SVG chart colors — updated by .dark class */
+:root {
+  --chart-line:   #6366f1;
+  --chart-area:   rgba(99, 102, 241, 0.22);
+  --chart-grid:   #f3f4f6;
+  --chart-axis:   #9ca3af;
+  --chart-zero:   #e5e7eb;
+}
+
+.dark {
+  --chart-line:   #818cf8;
+  --chart-area:   rgba(129, 140, 248, 0.18);
+  --chart-grid:   #1e293b;
+  --chart-axis:   #64748b;
+  --chart-zero:   #334155;
+}

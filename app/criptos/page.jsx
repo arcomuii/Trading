@@ -14,8 +14,8 @@ function PriceChart({ data, color = '#4f46e5', id = 'chart' }) {
   const pathData = `M ${points[0]} L ${points.join(' L ')}`
   const areaData = `${pathData} L ${W - P},${H} L ${P},${H} Z`
   return (
-    <div className="mt-8 pt-6 border-t border-gray-100">
-      <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-4">
+    <div className="mt-8 pt-6 border-t border-gray-100 dark:border-slate-800">
+      <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-4">
         <span>Hace 60 min</span><span>Movimiento última hora (1m)</span><span>Ahora</span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-32 overflow-visible">
@@ -69,31 +69,31 @@ export default function CriptosPage() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-gray-50 py-10 px-4 flex items-center justify-center">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-4 flex items-center justify-center">
       <div className="max-w-5xl w-full text-center">
-        <h1 className="text-4xl font-bold text-indigo-700 mb-6">Dashboard de Criptomonedas</h1>
+        <h1 className="text-4xl font-bold text-indigo-700 dark:text-indigo-400 mb-6">Dashboard de Criptomonedas</h1>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Bitcoin */}
-          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 flex flex-col justify-between">
-            <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Bitcoin (BTC)</h2>
-            {loading && <p className="text-gray-600 text-lg">Cargando precio...</p>}
-            {error && <div className="text-red-500 text-lg font-medium"><p>Error:</p><p>{error}</p></div>}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-gray-100 dark:border-slate-800 p-8 flex flex-col justify-between">
+            <h2 className="text-sm font-bold text-gray-400 dark:text-slate-500 uppercase tracking-widest mb-4">Bitcoin (BTC)</h2>
+            {loading && <p className="text-gray-600 dark:text-slate-400 text-lg">Cargando precio...</p>}
+            {error && <div className="text-red-500 dark:text-red-400 text-lg font-medium"><p>Error:</p><p>{error}</p></div>}
             {bitcoinPrice && !loading && !error && (
-              <p className="text-5xl font-black text-green-600">${bitcoinPrice.toLocaleString('en-US')} USD</p>
+              <p className="text-5xl font-black text-green-600 dark:text-green-400">${bitcoinPrice.toLocaleString('en-US')} USD</p>
             )}
             {!loading && !error && btcHistory.length > 0 && (
               <PriceChart data={btcHistory} color={btcHistory[btcHistory.length - 1] >= btcHistory[0] ? '#16a34a' : '#dc2626'} id="btc" />
             )}
           </div>
           {/* Ethereum */}
-          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 flex flex-col justify-between">
-            <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Ethereum (ETH)</h2>
-            {loading && <p className="text-gray-600 text-lg">Cargando precio...</p>}
-            {error && <div className="text-red-500 text-lg font-medium"><p>Error:</p><p>{error}</p></div>}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-gray-100 dark:border-slate-800 p-8 flex flex-col justify-between">
+            <h2 className="text-sm font-bold text-gray-400 dark:text-slate-500 uppercase tracking-widest mb-4">Ethereum (ETH)</h2>
+            {loading && <p className="text-gray-600 dark:text-slate-400 text-lg">Cargando precio...</p>}
+            {error && <div className="text-red-500 dark:text-red-400 text-lg font-medium"><p>Error:</p><p>{error}</p></div>}
             {ethPrice && !loading && !error && (
               <div className="space-y-2">
-                <p className="text-5xl font-black text-indigo-600">${ethPrice.toLocaleString('en-US')} USD</p>
-                <p className="text-gray-400 text-sm">Actualizado vía CoinGecko + Binance</p>
+                <p className="text-5xl font-black text-indigo-600 dark:text-indigo-400">${ethPrice.toLocaleString('en-US')} USD</p>
+                <p className="text-gray-400 dark:text-slate-500 text-sm">Actualizado vía CoinGecko + Binance</p>
               </div>
             )}
             {!loading && !error && ethHistory.length > 0 && (

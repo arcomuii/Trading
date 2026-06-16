@@ -17,8 +17,8 @@ function PriceChart({ data, color = '#4f46e5', id = 'chart' }) {
   const pathData = `M ${points[0]} L ${points.join(' L ')}`
   const areaData = `${pathData} L ${W - P},${H} L ${P},${H} Z`
   return (
-    <div className="mt-8 pt-6 border-t border-gray-100">
-      <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-4">
+    <div className="mt-8 pt-6 border-t border-gray-100 dark:border-slate-800">
+      <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-4">
         <span>Inicio del día</span><span>Movimiento (5m)</span><span>Ahora</span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-32 overflow-visible">
@@ -40,16 +40,16 @@ function StockCard({ stock, history }) {
   const pos    = change >= 0
   const color  = pos ? '#16a34a' : '#dc2626'
   return (
-    <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 flex flex-col justify-between">
-      <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">
+    <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-gray-100 dark:border-slate-800 p-8 flex flex-col justify-between">
+      <h2 className="text-sm font-bold text-gray-400 dark:text-slate-500 uppercase tracking-widest mb-4">
         {stock.symbol} · {NAMES[stock.symbol] ?? stock.shortName}
       </h2>
-      <p className={`text-5xl font-black ${pos ? 'text-green-600' : 'text-red-500'}`}>
+      <p className={`text-5xl font-black ${pos ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
         ${(stock.regularMarketPrice ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
       </p>
-      <p className={`text-sm font-semibold mt-2 ${pos ? 'text-green-500' : 'text-red-400'}`}>
+      <p className={`text-sm font-semibold mt-2 ${pos ? 'text-green-500 dark:text-green-400' : 'text-red-400 dark:text-red-400'}`}>
         {pos ? '▲' : '▼'} {Math.abs(change).toFixed(2)}%
-        <span className="text-gray-400 font-normal ml-2">
+        <span className="text-gray-400 dark:text-slate-500 font-normal ml-2">
           ({pos ? '+' : ''}{(stock.regularMarketChange ?? 0).toFixed(2)})
         </span>
       </p>
@@ -97,16 +97,16 @@ export default function AccionesPage() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-gray-50 py-10 px-4 flex items-center justify-center">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-4 flex items-center justify-center">
       <div className="max-w-7xl w-full text-center">
-        <h1 className="text-4xl font-bold text-indigo-700 mb-2">Dashboard de Acciones</h1>
-        <p className="text-gray-400 text-sm mb-8">
+        <h1 className="text-4xl font-bold text-indigo-700 dark:text-indigo-400 mb-2">Dashboard de Acciones</h1>
+        <p className="text-gray-400 dark:text-slate-500 text-sm mb-8">
           NYSE / NASDAQ · actualiza cada 10 min
           {lastUpdate && <span> · {lastUpdate.toLocaleTimeString('es-MX')}</span>}
         </p>
-        {loading && <p className="text-gray-600 text-lg">Cargando acciones...</p>}
+        {loading && <p className="text-gray-600 dark:text-slate-400 text-lg">Cargando acciones...</p>}
         {error && (
-          <div className="text-red-500 text-lg font-medium">
+          <div className="text-red-500 dark:text-red-400 text-lg font-medium">
             <p>Error al obtener datos</p>
             <p className="text-sm font-mono mt-1">{error}</p>
           </div>

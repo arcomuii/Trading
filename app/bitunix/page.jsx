@@ -7,7 +7,7 @@ function SideBadge({ side }) {
     const isLong = (side || "").toUpperCase() === "LONG" || (side || "").toUpperCase() === "BUY";
     return (
         <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide ${
-            isLong ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
+            isLong ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400" : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"
         }`}>
             {isLong ? "▲ LONG" : "▼ SHORT"}
         </span>
@@ -16,10 +16,10 @@ function SideBadge({ side }) {
 
 function PnlCell({ value }) {
     const num = parseFloat(value);
-    if (isNaN(num)) return <span className="text-gray-400">—</span>;
+    if (isNaN(num)) return <span className="text-gray-400 dark:text-slate-500">—</span>;
     const pos = num >= 0;
     return (
-        <span className={`font-semibold tabular-nums ${pos ? "text-green-600" : "text-red-500"}`}>
+        <span className={`font-semibold tabular-nums ${pos ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
             {pos ? "+" : ""}{num.toFixed(4)}
         </span>
     );
@@ -58,7 +58,7 @@ function PriceGauge({ entry, current, tp, sl }) {
     const def = Object.fromEntries(Object.entries(vals).filter(([, v]) => !isNaN(v) && v > 0));
     const prices = Object.values(def);
     if (prices.length < 2) {
-        return <p className="text-center text-gray-400 text-sm py-4">Sin datos de precio suficientes</p>;
+        return <p className="text-center text-gray-400 dark:text-slate-500 text-sm py-4">Sin datos de precio suficientes</p>;
     }
 
     const minP   = Math.min(...prices);
@@ -161,25 +161,25 @@ function PriceGauge({ entry, current, tp, sl }) {
 
             {/* Distance stats */}
             {(distSl !== null || distTp !== null) && (
-                <div className="flex justify-around mt-1 text-xs border-t border-gray-100 pt-3">
+                <div className="flex justify-around mt-1 text-xs border-t border-gray-100 dark:border-slate-700 pt-3">
                     {distSl !== null && (
                         <div className="text-center">
-                            <p className="text-gray-400 mb-0.5">Distancia al SL</p>
-                            <p className={`font-bold text-sm ${distSl >= 0 ? "text-green-600" : "text-red-500"}`}>
+                            <p className="text-gray-400 dark:text-slate-500 mb-0.5">Distancia al SL</p>
+                            <p className={`font-bold text-sm ${distSl >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
                                 {distSl >= 0 ? "+" : ""}{distSl.toFixed(2)}%
                             </p>
                         </div>
                     )}
                     {def.current && (
                         <div className="text-center">
-                            <p className="text-gray-400 mb-0.5">Precio actual</p>
-                            <p className="font-bold text-sm text-gray-800">${fmt(def.current)}</p>
+                            <p className="text-gray-400 dark:text-slate-500 mb-0.5">Precio actual</p>
+                            <p className="font-bold text-sm text-gray-800 dark:text-slate-100">${fmt(def.current)}</p>
                         </div>
                     )}
                     {distTp !== null && (
                         <div className="text-center">
-                            <p className="text-gray-400 mb-0.5">Distancia al TP</p>
-                            <p className={`font-bold text-sm ${distTp >= 0 ? "text-blue-600" : "text-orange-500"}`}>
+                            <p className="text-gray-400 dark:text-slate-500 mb-0.5">Distancia al TP</p>
+                            <p className={`font-bold text-sm ${distTp >= 0 ? "text-blue-600 dark:text-blue-400" : "text-orange-500 dark:text-orange-400"}`}>
                                 {distTp >= 0 ? "+" : ""}{distTp.toFixed(2)}%
                             </p>
                         </div>
@@ -251,19 +251,19 @@ function TpSlModal({ position, currentPrice, onClose }) {
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
 
             {/* Panel */}
-            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
 
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800">
                     <div>
-                        <h2 className="font-bold text-gray-800 text-lg">Take Profit / Stop Loss</h2>
-                        <p className="text-gray-400 text-xs mt-0.5">
+                        <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">Take Profit / Stop Loss</h2>
+                        <p className="text-gray-400 dark:text-slate-500 text-xs mt-0.5">
                             {position.symbol}
                             {position.side && <> · <SideBadge side={position.side} /></>}
                         </p>
                     </div>
                     <button onClick={onClose}
-                        className="text-gray-300 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100">
+                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="2.5" strokeLinecap="round">
                             <line x1="18" y1="6" x2="6" y2="18" />
@@ -274,7 +274,7 @@ function TpSlModal({ position, currentPrice, onClose }) {
 
                 <div className="px-6 py-5">
                     {loading ? (
-                        <div className="flex items-center justify-center py-12 text-gray-300 text-sm gap-2">
+                        <div className="flex items-center justify-center py-12 text-gray-300 dark:text-slate-600 text-sm gap-2">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
                                 <path d="M21 12a9 9 0 1 1-6.219-8.56" />
@@ -282,9 +282,9 @@ function TpSlModal({ position, currentPrice, onClose }) {
                             Consultando órdenes TP/SL…
                         </div>
                     ) : error ? (
-                        <div className="text-red-500 text-sm py-4">
+                        <div className="text-red-500 dark:text-red-400 text-sm py-4">
                             <p className="font-semibold mb-1">Error al consultar</p>
-                            <p className="font-mono text-xs bg-red-50 p-2 rounded">{error}</p>
+                            <p className="font-mono text-xs bg-red-50 dark:bg-red-950 p-2 rounded">{error}</p>
                         </div>
                     ) : (
                         <>
@@ -297,7 +297,7 @@ function TpSlModal({ position, currentPrice, onClose }) {
                                     sl={sl}
                                 />
                             ) : (
-                                <div className="text-center py-8 text-gray-400">
+                                <div className="text-center py-8 text-gray-400 dark:text-slate-500">
                                     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                          strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
                                          className="mx-auto mb-3 opacity-50">
@@ -312,13 +312,13 @@ function TpSlModal({ position, currentPrice, onClose }) {
                             {/* Price cards */}
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-5">
                                 {[
-                                    { label: "Entrada",     value: entryPrice,   color: "text-indigo-600", bg: "bg-indigo-50" },
-                                    { label: "Actual",      value: currentPrice, color: "text-gray-800",   bg: "bg-gray-50"   },
-                                    { label: "Take Profit", value: tp,           color: "text-green-600",  bg: "bg-green-50"  },
-                                    { label: "Stop Loss",   value: sl,           color: "text-red-500",    bg: "bg-red-50"    },
+                                    { label: "Entrada",     value: entryPrice,   color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-950" },
+                                    { label: "Actual",      value: currentPrice, color: "text-gray-800 dark:text-slate-100",    bg: "bg-gray-50 dark:bg-slate-800"    },
+                                    { label: "Take Profit", value: tp,           color: "text-green-600 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-950"   },
+                                    { label: "Stop Loss",   value: sl,           color: "text-red-500 dark:text-red-400",       bg: "bg-red-50 dark:bg-red-950"       },
                                 ].map(({ label, value, color, bg }) => (
                                     <div key={label} className={`${bg} rounded-xl p-3 text-center`}>
-                                        <p className="text-gray-400 text-[10px] uppercase tracking-wide font-semibold mb-1">{label}</p>
+                                        <p className="text-gray-400 dark:text-slate-500 text-[10px] uppercase tracking-wide font-semibold mb-1">{label}</p>
                                         <p className={`font-bold text-sm ${color} tabular-nums`}>
                                             {value ? `$${fmt(value)}` : "—"}
                                         </p>
@@ -329,24 +329,186 @@ function TpSlModal({ position, currentPrice, onClose }) {
                             {/* Raw data */}
                             {orders.length > 0 ? (
                                 <details className="mt-5">
-                                    <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none">
+                                    <summary className="cursor-pointer text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 select-none">
                                         Ver respuesta raw · {orders.length} orden{orders.length !== 1 ? "es" : ""}
                                     </summary>
-                                    <pre className="mt-2 text-xs bg-gray-50 rounded-xl p-3 overflow-auto max-h-52 text-gray-600">
+                                    <pre className="mt-2 text-xs bg-gray-50 dark:bg-slate-800 rounded-xl p-3 overflow-auto max-h-52 text-gray-600 dark:text-slate-300">
                                         {JSON.stringify(orders, null, 2)}
                                     </pre>
                                 </details>
                             ) : tpslData && (
                                 <details className="mt-5">
-                                    <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none">
+                                    <summary className="cursor-pointer text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 select-none">
                                         Ver respuesta raw completa
                                     </summary>
-                                    <pre className="mt-2 text-xs bg-gray-50 rounded-xl p-3 overflow-auto max-h-52 text-gray-600">
+                                    <pre className="mt-2 text-xs bg-gray-50 dark:bg-slate-800 rounded-xl p-3 overflow-auto max-h-52 text-gray-600 dark:text-slate-300">
                                         {JSON.stringify(tpslData, null, 2)}
                                     </pre>
                                 </details>
                             )}
                         </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─── ClosePositionModal ───────────────────────────────────────────────────────
+
+function ClosePositionModal({ position, onClose, onClosed }) {
+    const [status,  setStatus]  = useState("idle");   // idle | loading | success | error
+    const [apiResp, setApiResp] = useState(null);
+
+    useEffect(() => {
+        const h = e => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    const isLong = (position.side || "").toUpperCase() === "LONG" || (position.side || "").toUpperCase() === "BUY";
+    const closeSide = isLong ? "SELL" : "BUY";
+    const qty       = pick(position, "qty","size","quantity","positionAmt","available","vol");
+    const pnl       = pick(position, "unrealizedPNL","unrealPnl","unrealisedPnl","unrealizedPnl","unrealPNL","pnl","profit");
+    const pnlNum    = parseFloat(pnl);
+
+    const handleClose = async () => {
+        setStatus("loading");
+        try {
+            const body = JSON.stringify({
+                symbol:    position.symbol,
+                side:      closeSide,
+                tradeSide: "CLOSE",
+                orderType: "MARKET",
+                qty:       qty ? String(qty) : undefined,
+                ...(position.positionId ? { positionId: position.positionId } : {}),
+            });
+            const res  = await fetch("/api/bitunix/api/v1/futures/trade/place_order", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body,
+            });
+            const data = await res.json();
+            setApiResp(data);
+            const ok = data?.code === 0 || data?.code === "0" || data?.data?.orderId;
+            setStatus(ok ? "success" : "error");
+            if (ok) onClosed?.();
+        } catch (err) {
+            setApiResp({ error: err.message });
+            setStatus("error");
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+
+                {/* Header */}
+                <div className={`px-6 py-4 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between ${
+                    status === "success" ? "bg-green-50 dark:bg-green-950" : status === "error" ? "bg-red-50 dark:bg-red-950" : ""
+                }`}>
+                    <div>
+                        <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">Cerrar posición</h2>
+                        <p className="text-gray-400 dark:text-slate-500 text-xs mt-0.5 flex items-center gap-1.5">
+                            {position.symbol} · <SideBadge side={position.side} />
+                        </p>
+                    </div>
+                    <button onClick={onClose}
+                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             strokeWidth="2.5" strokeLinecap="round">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div className="px-6 py-5">
+                    {status === "idle" && (
+                        <>
+                            {/* Resumen */}
+                            <div className="grid grid-cols-2 gap-3 mb-5">
+                                {[
+                                    { label: "Cantidad",   value: qty  ? fmt(qty, 6)   : "—" },
+                                    { label: "P&L no real.", value: pnl  ? null          : "—",
+                                      custom: pnl ? <PnlCell value={pnl} /> : null },
+                                ].map(({ label, value, custom }) => (
+                                    <div key={label} className="bg-gray-50 dark:bg-slate-800 rounded-xl p-3 text-center">
+                                        <p className="text-gray-400 dark:text-slate-500 text-[10px] uppercase tracking-wide font-semibold mb-1">{label}</p>
+                                        <p className="font-bold text-sm text-gray-800 dark:text-slate-100">{custom ?? value}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="text-sm text-gray-500 dark:text-slate-400 mb-5">
+                                Se enviará una orden de <span className="font-bold text-gray-800 dark:text-slate-100">{closeSide}</span> a
+                                precio de mercado con <code className="bg-gray-100 dark:bg-slate-700 dark:text-slate-300 px-1 rounded text-xs">reduceOnly: true</code>.
+                            </p>
+                            <button onClick={handleClose}
+                                className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl
+                                           transition-colors flex items-center justify-center gap-2">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     strokeWidth="2.5" strokeLinecap="round">
+                                    <polyline points="3 6 5 6 21 6" />
+                                    <path d="M19 6l-1 14H6L5 6" />
+                                    <path d="M10 11v6M14 11v6" />
+                                </svg>
+                                Confirmar cierre a mercado
+                            </button>
+                        </>
+                    )}
+
+                    {status === "loading" && (
+                        <div className="flex items-center justify-center py-10 text-gray-400 dark:text-slate-500 gap-3">
+                            <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            Enviando orden de cierre…
+                        </div>
+                    )}
+
+                    {status === "success" && (
+                        <div className="text-center py-6">
+                            <div className="w-14 h-14 bg-green-100 dark:bg-green-950 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+                                     stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round">
+                                    <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                            </div>
+                            <p className="font-bold text-gray-800 dark:text-slate-100 text-lg">Orden enviada</p>
+                            <p className="text-gray-400 dark:text-slate-500 text-sm mt-1 mb-4">La posición se está cerrando a mercado</p>
+                            <button onClick={onClose}
+                                className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-semibold px-6 py-2 rounded-xl transition-colors">
+                                Cerrar
+                            </button>
+                        </div>
+                    )}
+
+                    {status === "error" && (
+                        <div className="text-center py-4">
+                            <div className="w-14 h-14 bg-red-100 dark:bg-red-950 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+                                     stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
+                                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                            </div>
+                            <p className="font-bold text-red-600 dark:text-red-400 mb-2">Error al cerrar</p>
+                            {apiResp && (
+                                <pre className="text-xs bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 rounded-xl p-3 text-left overflow-auto max-h-36 mb-4">
+                                    {JSON.stringify(apiResp, null, 2)}
+                                </pre>
+                            )}
+                            <div className="flex gap-2 justify-center">
+                                <button onClick={() => setStatus("idle")}
+                                    className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-semibold px-5 py-2 rounded-xl transition-colors">
+                                    Reintentar
+                                </button>
+                                <button onClick={onClose}
+                                    className="bg-red-50 dark:bg-red-950 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-400 font-semibold px-5 py-2 rounded-xl transition-colors">
+                                    Cancelar
+                                </button>
+                            </div>
+                        </div>
                     )}
                 </div>
             </div>
@@ -392,6 +554,7 @@ function extractList(json) {
 export default function BitunixPage() {
     const [expanded,   setExpanded]   = useState(null);
     const [tpslModal,  setTpslModal]  = useState(null);   // position object or null
+    const [closeModal, setCloseModal] = useState(null);  // position object or null
     const [items,      setItems]      = useState([]);
     const [prices,     setPrices]     = useState({});
     const [lastUpdate, setLastUpdate] = useState(null);
@@ -490,7 +653,7 @@ export default function BitunixPage() {
     const SortTh = ({ col }) => (
         <th
             onClick={() => toggleSort(col.key)}
-            className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer select-none hover:text-gray-700 whitespace-nowrap"
+            className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-widest cursor-pointer select-none hover:text-gray-700 dark:hover:text-slate-200 whitespace-nowrap"
         >
             {col.label}
             {sortKey === col.key && (
@@ -508,16 +671,16 @@ export default function BitunixPage() {
     const totalCols = COLUMNS.length + 1;
 
     return (
-        <div className="min-h-screen bg-gray-50 py-10 px-6">
+        <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-6">
             <div className="max-w-7xl mx-auto">
 
                 <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Operaciones abiertas</h1>
-                        <p className="text-gray-400 text-sm mt-1">
+                        <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Operaciones abiertas</h1>
+                        <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
                             Bitunix Futures · posiciones activas
                             {lastUpdate && (
-                                <span className="ml-2 text-gray-300">
+                                <span className="ml-2 text-gray-300 dark:text-slate-600">
                                     · Actualizado: {lastUpdate.toLocaleTimeString("es-MX")}
                                 </span>
                             )}
@@ -526,7 +689,7 @@ export default function BitunixPage() {
                     <button
                         onClick={() => fetchPositions()}
                         disabled={loading}
-                        className="flex items-center gap-2 bg-white border border-gray-200 hover:border-indigo-300 text-gray-600 hover:text-indigo-600 font-medium text-sm px-4 py-2 rounded-xl transition-colors shadow-sm disabled:opacity-50"
+                        className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 text-gray-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-medium text-sm px-4 py-2 rounded-xl transition-colors shadow-sm disabled:opacity-50"
                     >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
                             strokeLinecap="round" strokeLinejoin="round"
@@ -545,7 +708,7 @@ export default function BitunixPage() {
                                 className={`px-4 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                                     endpoint === ep
                                         ? "bg-indigo-500 text-white border-indigo-500"
-                                        : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-500"
+                                        : "bg-white dark:bg-slate-900 text-gray-500 dark:text-slate-400 border-gray-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-500 dark:hover:text-indigo-400"
                                 }`}>
                                 {label}
                             </button>
@@ -558,36 +721,36 @@ export default function BitunixPage() {
                         onChange={e => { setSymbol(e.target.value); symbolRef.current = e.target.value; }}
                         onKeyDown={e => e.key === "Enter" && fetchPositions()}
                         placeholder="Símbolo (ej. BTCUSDT) — Enter para aplicar"
-                        className="flex-1 max-w-xs border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white shadow-sm"
+                        className="flex-1 max-w-xs border border-gray-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-700 bg-white dark:bg-slate-900 dark:text-slate-100 shadow-sm"
                     />
                     <input type="text" value={search}
                         onChange={e => setSearch(e.target.value)}
                         placeholder="Buscar en resultados…"
-                        className="flex-1 max-w-xs border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white shadow-sm"
+                        className="flex-1 max-w-xs border border-gray-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-700 bg-white dark:bg-slate-900 dark:text-slate-100 shadow-sm"
                     />
                 </div>
 
                 {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-2xl p-6 mb-6 text-red-700">
+                    <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-2xl p-6 mb-6 text-red-700 dark:text-red-300">
                         <p className="font-semibold mb-1">Error al obtener datos</p>
                         <p className="text-sm font-mono mb-2">{error}</p>
-                        <p className="text-xs text-red-400 font-mono mb-3">URL: {usedUrl}</p>
+                        <p className="text-xs text-red-400 dark:text-red-500 font-mono mb-3">URL: {usedUrl}</p>
                         {rawData && (
                             <details className="mt-2">
                                 <summary className="cursor-pointer text-sm text-red-500 hover:text-red-700">Ver respuesta raw</summary>
-                                <pre className="mt-2 text-xs bg-red-100 rounded p-3 overflow-auto max-h-64">
+                                <pre className="mt-2 text-xs bg-red-100 dark:bg-red-900 rounded p-3 overflow-auto max-h-64">
                                     {JSON.stringify(rawData, null, 2)}
                                 </pre>
                             </details>
                         )}
-                        <p className="text-xs text-red-400 mt-3">Prueba cambiando el endpoint con los botones de arriba.</p>
+                        <p className="text-xs text-red-400 dark:text-red-500 mt-3">Prueba cambiando el endpoint con los botones de arriba.</p>
                     </div>
                 )}
 
                 {!error && (
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-800 overflow-hidden">
                         {loading && items.length === 0 ? (
-                            <div className="flex items-center justify-center h-52 text-gray-300 text-sm">
+                            <div className="flex items-center justify-center h-52 text-gray-300 dark:text-slate-600 text-sm">
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                                     strokeLinecap="round" strokeLinejoin="round" className="animate-spin mr-2">
                                     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
@@ -595,7 +758,7 @@ export default function BitunixPage() {
                                 Cargando…
                             </div>
                         ) : filtered.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-16 text-gray-300">
+                            <div className="flex flex-col items-center justify-center py-16 text-gray-300 dark:text-slate-600">
                                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4"
                                     strokeLinecap="round" strokeLinejoin="round" className="mb-3">
                                     <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
@@ -603,11 +766,11 @@ export default function BitunixPage() {
                                     <path d="M9 12h6M9 16h4" />
                                 </svg>
                                 <p className="text-sm">Sin resultados para este endpoint</p>
-                                <p className="text-xs mt-1 text-gray-200 font-mono">{usedUrl}</p>
+                                <p className="text-xs mt-1 text-gray-200 dark:text-slate-700 font-mono">{usedUrl}</p>
                                 {rawData && (
                                     <details className="mt-4 text-left">
-                                        <summary className="cursor-pointer text-xs text-gray-300 hover:text-gray-500">Ver respuesta raw</summary>
-                                        <pre className="mt-2 text-xs bg-gray-50 rounded p-3 overflow-auto max-h-64 text-gray-500">
+                                        <summary className="cursor-pointer text-xs text-gray-300 dark:text-slate-600 hover:text-gray-500 dark:hover:text-slate-400">Ver respuesta raw</summary>
+                                        <pre className="mt-2 text-xs bg-gray-50 dark:bg-slate-800 rounded p-3 overflow-auto max-h-64 text-gray-500 dark:text-slate-400">
                                             {JSON.stringify(rawData, null, 2)}
                                         </pre>
                                     </details>
@@ -618,9 +781,9 @@ export default function BitunixPage() {
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-sm">
                                         <thead>
-                                            <tr className="border-b border-gray-100 bg-gray-50/70">
+                                            <tr className="border-b border-gray-100 dark:border-slate-800 bg-gray-50/70 dark:bg-slate-800/70">
                                                 {COLUMNS.map(col => <SortTh key={col.key} col={col} />)}
-                                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-widest whitespace-nowrap">
+                                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-widest whitespace-nowrap">
                                                     TP / SL
                                                 </th>
                                             </tr>
@@ -643,32 +806,32 @@ export default function BitunixPage() {
                                                     <Fragment key={rowId}>
                                                         <tr
                                                             onClick={() => setExpanded(isOpen ? null : rowId)}
-                                                            className="border-b border-gray-50 hover:bg-indigo-50/30 transition-colors cursor-pointer">
-                                                            <td className="px-4 py-3 font-bold text-gray-800 whitespace-nowrap">
-                                                                <span className="mr-1.5 text-gray-300 text-xs">{isOpen ? "▼" : "▶"}</span>
+                                                            className="border-b border-gray-50 dark:border-slate-800 hover:bg-indigo-50/30 dark:hover:bg-indigo-950/30 transition-colors cursor-pointer">
+                                                            <td className="px-4 py-3 font-bold text-gray-800 dark:text-slate-100 whitespace-nowrap">
+                                                                <span className="mr-1.5 text-gray-300 dark:text-slate-600 text-xs">{isOpen ? "▼" : "▶"}</span>
                                                                 {o.symbol}
                                                             </td>
                                                             <td className="px-4 py-3 whitespace-nowrap"><SideBadge side={o.side} /></td>
-                                                            <td className="px-4 py-3 text-gray-600 tabular-nums whitespace-nowrap">{qty ? fmt(qty, 6) : "—"}</td>
-                                                            <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">
+                                                            <td className="px-4 py-3 text-gray-600 dark:text-slate-300 tabular-nums whitespace-nowrap">{qty ? fmt(qty, 6) : "—"}</td>
+                                                            <td className="px-4 py-3 font-mono text-gray-700 dark:text-slate-300 whitespace-nowrap">
                                                                 {entryPrice ? `$${fmt(entryPrice)}` : "—"}
                                                             </td>
-                                                            <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">
+                                                            <td className="px-4 py-3 font-mono text-gray-700 dark:text-slate-300 whitespace-nowrap">
                                                                 {markPrice ? `$${fmt(markPrice)}` : "—"}
                                                             </td>
                                                             <td className="px-4 py-3 whitespace-nowrap">
                                                                 <PnlCell value={pnl} />
                                                             </td>
-                                                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-center">
+                                                            <td className="px-4 py-3 text-gray-500 dark:text-slate-400 whitespace-nowrap text-center">
                                                                 {lev ? `${lev}×` : "—"}
                                                             </td>
                                                             <td className="px-4 py-3 font-mono text-orange-400 whitespace-nowrap text-xs">
                                                                 {liqPrice ? `$${fmt(liqPrice)}` : "—"}
                                                             </td>
-                                                            <td className="px-4 py-3 text-gray-500 tabular-nums whitespace-nowrap">
+                                                            <td className="px-4 py-3 text-gray-500 dark:text-slate-400 tabular-nums whitespace-nowrap">
                                                                 {margin ? `$${fmt(margin)}` : "—"}
                                                             </td>
-                                                            <td className="px-4 py-3 text-gray-400 whitespace-nowrap text-xs tabular-nums">
+                                                            <td className="px-4 py-3 text-gray-400 dark:text-slate-500 whitespace-nowrap text-xs tabular-nums">
                                                                 {openTime ? fmtDate(openTime) : "—"}
                                                             </td>
                                                             {/* TP/SL button — stops row-expand propagation */}
@@ -677,8 +840,8 @@ export default function BitunixPage() {
                                                                 <button
                                                                     onClick={() => setTpslModal(o)}
                                                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
-                                                                               border border-violet-200 text-violet-600 bg-violet-50
-                                                                               hover:bg-violet-100 hover:border-violet-300 transition-colors"
+                                                                               border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-950
+                                                                               hover:bg-violet-100 dark:hover:bg-violet-900 hover:border-violet-300 dark:hover:border-violet-700 transition-colors"
                                                                 >
                                                                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
                                                                          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -690,18 +853,36 @@ export default function BitunixPage() {
                                                         </tr>
 
                                                         {isOpen && (
-                                                            <tr key={`${rowId}-exp`} className="bg-gray-50/80">
+                                                            <tr key={`${rowId}-exp`} className="bg-gray-50/80 dark:bg-slate-800/80">
                                                                 <td colSpan={totalCols} className="px-6 py-4">
-                                                                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
+                                                                    {/* Botón cerrar posición */}
+                                                                    <div className="mb-4">
+                                                                        <button
+                                                                            onClick={e => { e.stopPropagation(); setCloseModal(o); }}
+                                                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold
+                                                                                       bg-red-500 hover:bg-red-600 text-white transition-colors shadow-sm"
+                                                                        >
+                                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                                                                 stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                                                                                <polyline points="3 6 5 6 21 6" />
+                                                                                <path d="M19 6l-1 14H6L5 6" />
+                                                                                <path d="M10 11v6M14 11v6" />
+                                                                            </svg>
+                                                                            Cerrar posición
+                                                                        </button>
+                                                                    </div>
+                                                                    <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-widest mb-3">
                                                                         <a href={`https://www.bitunix.com/es-es/contract-trade/${o.symbol}`} className="underline text-green-500" target="_blank">Ver en Bitunix</a>
+                                                                        <br />
+                                                                        <a href={`https://es.tradingview.com/chart/tXjDAvNO/?symbol=BITUNIX%3A${o.symbol}.P`} className="underline text-red-500" target="_blank">Ver en Tradingview</a>
                                                                         <br />
                                                                         Todos los campos devueltos por la API
                                                                     </p>
                                                                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-6 gap-y-2">
                                                                         {Object.entries(o).map(([k, v]) => (
                                                                             <div key={k} className="text-xs">
-                                                                                <span className="text-gray-400 font-mono">{k}: </span>
-                                                                                <span className="text-gray-700 font-medium break-all">{String(v)}</span>
+                                                                                <span className="text-gray-400 dark:text-slate-500 font-mono">{k}: </span>
+                                                                                <span className="text-gray-700 dark:text-slate-300 font-medium break-all">{String(v)}</span>
                                                                             </div>
                                                                         ))}
                                                                     </div>
@@ -714,7 +895,7 @@ export default function BitunixPage() {
                                         </tbody>
                                     </table>
                                 </div>
-                                <div className="px-5 py-3 bg-gray-50/50 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
+                                <div className="px-5 py-3 bg-gray-50/50 dark:bg-slate-800/50 border-t border-gray-100 dark:border-slate-800 text-xs text-gray-400 dark:text-slate-500 flex items-center justify-between">
                                     <span>{filtered.length} de {items.length} resultados</span>
                                     {loading && <span className="text-indigo-400">Actualizando…</span>}
                                 </div>
@@ -731,6 +912,15 @@ export default function BitunixPage() {
                     position={tpslModal}
                     currentPrice={prices[tpslModal.symbol] ?? pick(tpslModal, "markPrice","lastPrice","currentPrice")}
                     onClose={() => setTpslModal(null)}
+                />
+            )}
+
+            {/* Close Position Modal */}
+            {closeModal && (
+                <ClosePositionModal
+                    position={closeModal}
+                    onClose={() => setCloseModal(null)}
+                    onClosed={() => { setCloseModal(null); setTimeout(() => fetchPositions(), 1500); }}
                 />
             )}
         </div>
