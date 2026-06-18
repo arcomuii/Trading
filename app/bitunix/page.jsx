@@ -621,7 +621,7 @@ export default function BitunixPage() {
 
     useEffect(() => {
         fetchPositions();
-        const id = setInterval(() => fetchPositions(), 10 * 60 * 1000);
+        const id = setInterval(() => fetchPositions(), 60_000);
         return () => clearInterval(id);
     }, [fetchPositions]);
 

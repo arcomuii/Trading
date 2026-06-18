@@ -515,61 +515,65 @@ function NearCard({ coin, analysis }) {
     const missing = conds.find(c => !c.ok);
 
     return (
-        <div className="flex items-center gap-3 bg-white dark:bg-slate-900 rounded-xl
+        <div className="flex flex-col items-center gap-3 bg-white dark:bg-slate-900 rounded-xl
                         border border-gray-100 dark:border-slate-800 p-3 hover:border-indigo-200
                         dark:hover:border-indigo-800 transition-colors">
-            {/* Image */}
-            {coin.image
-                ? <img src={coin.image} alt={sym} className="w-8 h-8 rounded-full flex-shrink-0"
-                       onError={e => e.target.style.display='none'} />
-                : <div className="w-8 h-8 rounded-full bg-gray-100 dark:bg-slate-700 flex-shrink-0" />
-            }
+            
+            <div className="w-full flex justify-between gap-5">
+                {/* Image */}
+                {coin.image
+                    ? <img src={coin.image} alt={sym} className="w-8 h-8 rounded-full flex-shrink-0"
+                        onError={e => e.target.style.display='none'} />
+                    : <div className="w-8 h-8 rounded-full bg-gray-100 dark:bg-slate-700 flex-shrink-0" />
+                }
 
-            {/* Name + direction */}
-            <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-gray-800 dark:text-slate-100 text-xs truncate">{sym}</span>
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                        isLong ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
-                               : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"
-                    }`}>
-                        {isLong ? "▲ L" : "▼ S"}
-                    </span>
+                {/* Name + direction */}
+                <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-gray-800 dark:text-slate-100 text-xs truncate">{sym}</span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                            isLong ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
+                                : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"
+                        }`}>
+                            {isLong ? "▲ L" : "▼ S"}
+                        </span>
+                    </div>
+                    {missing && (
+                        <p className="text-[9px] text-amber-600 dark:text-amber-400 truncate mt-0.5">
+                            Falta: {missing.label}
+                        </p>
+                    )}
                 </div>
-                {missing && (
-                    <p className="text-[9px] text-amber-600 dark:text-amber-400 truncate mt-0.5">
-                        Falta: {missing.label}
-                    </p>
-                )}
             </div>
 
-            {/* Condition dots */}
-            <div className="flex gap-1 flex-shrink-0">
-                {conds.map((c, i) => (
-                    <div key={i} title={c.label}
-                         className={`w-2 h-2 rounded-full ${c.ok ? "bg-green-500" : "bg-gray-200 dark:bg-slate-600"}`} />
-                ))}
-            </div>
+            <div className="w-full flex justify-between">
+                {/* Condition dots */}
+                <div className="flex gap-1 flex-shrink-0">
+                    {conds.map((c, i) => (
+                        <div key={i} title={c.label}
+                            className={`w-2 h-2 rounded-full ${c.ok ? "bg-green-500" : "bg-gray-200 dark:bg-slate-600"}`} />
+                    ))}
+                </div>
+                {/* ADX */}
+                <span className="text-[10px] font-mono text-indigo-500 dark:text-indigo-400 flex-shrink-0 w-10 text-right">
+                    {fmt(analysis.adx, 1)}
+                </span>
 
-            {/* ADX */}
-            <span className="text-[10px] font-mono text-indigo-500 dark:text-indigo-400 flex-shrink-0 w-10 text-right">
-                {fmt(analysis.adx, 1)}
-            </span>
-
-            {/* Links */}
-            <div className="flex gap-1 flex-shrink-0">
-                <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
-                   target="_blank" rel="noopener noreferrer"
-                   className="text-[9px] font-semibold px-1.5 py-0.5 rounded
-                              bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 hover:opacity-80">
-                    BX
-                </a>
-                <a href={`https://es.tradingview.com/chart/tXjDAvNO/?symbol=BITUNIX%3A${sym}USDT.P`}
-                   target="_blank" rel="noopener noreferrer"
-                   className="text-[9px] font-semibold px-1.5 py-0.5 rounded
-                              bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:opacity-80">
-                    TV
-                </a>
+                {/* Links */}
+                <div className="flex gap-1 flex-shrink-0">
+                    <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded
+                                bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 hover:opacity-80">
+                        BX
+                    </a>
+                    <a href={`https://es.tradingview.com/chart/tXjDAvNO/?symbol=BITUNIX%3A${sym}USDT.P`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded
+                                bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:opacity-80">
+                        TV
+                    </a>
+                </div>
             </div>
         </div>
     );
@@ -590,7 +594,6 @@ export default function ProspectosPage() {
     const abortRef    = useRef(false);
     const notifiedRef = useRef(new Set()); // IDs notificados en el ciclo actual
     const [notifPerm,     setNotifPerm]     = useState('default'); // 'granted' | 'denied' | 'default'
-    const [scanLog,       setScanLog]       = useState([]);
     const [showCoverage,  setShowCoverage]  = useState(false);
 
     // 0. Pedir permiso de notificaciones al cargar
@@ -699,11 +702,16 @@ export default function ProspectosPage() {
         load();
     }, [bitunixSymbols]);
 
-    // 3. Iniciar scan una sola vez cuando la lista esté lista
+    // Programar scan en el próximo slot al cargar
     useEffect(() => {
-        if (coins.length > 0 && !loadingCoins) {
+        if (coins.length === 0 || loadingCoins) return;
+        const slot = nextSlotTime();
+        setNextScanAt(slot);
+        const timer = setTimeout(() => {
+            setNextScanAt(null);
             runScan(coins, bitunixCount);
-        }
+        }, msUntilNextSlot());
+        return () => clearTimeout(timer);
     }, [coins]); // eslint-disable-line
 
     // Limpieza al desmontar
@@ -713,7 +721,6 @@ export default function ProspectosPage() {
         abortRef.current = false;
         notifiedRef.current.clear();
         setAnalysisCache({});
-        setScanLog([]);
         setProgress({ done: 0, total: coinsList.length });
         setScanRunning(true);
         setCurrentCoin(null);
@@ -741,21 +748,10 @@ export default function ProspectosPage() {
                         sendSignalNotification(coin, signal);
                         sendSignalEmail(coin, signal, data);
                     }
-                    setScanLog(prev => [...prev, {
-                        id: coin.id, symbol: coin.symbol.toUpperCase(),
-                        name: coin.name, signal, status: 200, ok: true,
-                    }]);
                 }
             } catch (err) {
                 if (!abortRef.current) {
                     setAnalysisCache(prev => ({ ...prev, [coin.id]: { loading: false, error: err.message } }));
-                    if (err.message?.startsWith('HTTP')) {
-                        const status = parseInt(err.message.replace('HTTP ', '')) || 0;
-                        setScanLog(prev => [...prev, {
-                            id: coin.id, symbol: coin.symbol.toUpperCase(),
-                            name: coin.name, status, ok: false, url: ohlcUrl,
-                        }]);
-                    }
                 }
             }
 
@@ -1035,85 +1031,6 @@ export default function ProspectosPage() {
                     </div>
                 )}
 
-                {/* ─── Log de escaneo ─────────────────────────────────────── */}
-                {scanLog.length > 0 && (
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-800 p-5 mb-6">
-                        <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-sm font-semibold text-gray-700 dark:text-slate-200">Log de escaneo</p>
-                                <span className="text-xs bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-400 px-2 py-0.5 rounded-full font-mono">
-                                    {scanLog.length} procesados
-                                </span>
-                                {(() => {
-                                    const signals = scanLog.filter(e => e.ok && e.signal);
-                                    const errors  = scanLog.filter(e => !e.ok);
-                                    return (
-                                        <>
-                                            {signals.length > 0 && (
-                                                <span className="text-xs bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full font-semibold">
-                                                    ⚡ {signals.length} señales
-                                                </span>
-                                            )}
-                                            {errors.length > 0 && (
-                                                <span className="text-xs bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 px-2 py-0.5 rounded-full font-semibold">
-                                                    ✕ {errors.length} errores
-                                                </span>
-                                            )}
-                                        </>
-                                    );
-                                })()}
-                            </div>
-                            {scanRunning && (
-                                <span className="text-xs text-gray-400 dark:text-slate-500">en curso…</span>
-                            )}
-                        </div>
-                        <div className="overflow-auto max-h-56 space-y-0 font-mono text-xs">
-                            {[...scanLog].reverse().map(entry => (
-                                <div key={entry.id}
-                                     className="flex items-center gap-2 py-1.5 border-b border-gray-50 dark:border-slate-800 last:border-0">
-                                    {/* dot */}
-                                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                                        !entry.ok            ? "bg-red-400 dark:bg-red-500" :
-                                        entry.signal         ? "bg-green-500" :
-                                                               "bg-gray-300 dark:bg-slate-600"
-                                    }`} />
-                                    {/* symbol */}
-                                    <span className="w-20 flex-shrink-0 font-semibold text-gray-700 dark:text-slate-300 truncate">
-                                        {entry.symbol}
-                                    </span>
-                                    {/* name */}
-                                    <span className="flex-1 text-gray-400 dark:text-slate-500 truncate">
-                                        {entry.name}
-                                    </span>
-                                    {/* status badge */}
-                                    <span className={`flex-shrink-0 font-bold px-2 py-0.5 rounded text-[10px] ${
-                                        !entry.ok
-                                            ? "bg-red-50 dark:bg-red-950 text-red-500 dark:text-red-400"
-                                            : "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400"
-                                    }`}>
-                                        {entry.status}
-                                    </span>
-                                    {/* signal badge (si aplica) */}
-                                    {entry.signal && (
-                                        <span className={`flex-shrink-0 font-bold px-2 py-0.5 rounded text-[10px] ${
-                                            entry.signal === "LONG"
-                                                ? "bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-400"
-                                                : "bg-orange-50 dark:bg-orange-950 text-orange-700 dark:text-orange-400"
-                                        }`}>
-                                            {entry.signal === "LONG" ? "▲ LONG" : "▼ SHORT"}
-                                        </span>
-                                    )}
-                                    {/* URL en errores */}
-                                    {!entry.ok && entry.url && (
-                                        <p className="text-[9px] text-gray-400 dark:text-slate-500 truncate max-w-[180px]" title={entry.url}>
-                                            {entry.url}
-                                        </p>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
 
                 {/* ─── Sin señales aún (escaneando) ────────────────────────── */}
                 {!initialLoad && scanRunning && totalSignals === 0 && (
@@ -1182,7 +1099,7 @@ export default function ProspectosPage() {
                                 · 2 de 3 condiciones cumplidas
                             </span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                             {nearSignals.map(coin => (
                                 <NearCard key={coin.id} coin={coin}
                                           analysis={analysisCache[coin.id].data} />

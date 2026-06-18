@@ -297,12 +297,15 @@ if (!curADX || isNaN(curADX.adx)) return null;
     if (isAdxRising)     reasoning.push('ADX ganando fuerza (impulso alcista)');
     if (isSqueezeOn)     reasoning.push('Squeeze ACTIVO: acumulación de varios días');
 
+    const condMet = (isTrendStarting ? 1 : 0) + (isStochBullish ? 1 : 0) + (isAdxRising ? 1 : 0);
+
     if (isTrendStarting && isStochBullish && isAdxRising) {
         signal = riskPct <= 0.06 ? 'SWING_LONG_TRIGGER' : 'SWING_LONG_ALTO_RIESGO';
     }
 
     return {
         signal,
+        condMet,
         price,
         stopLoss,
         riskPct,
@@ -391,6 +394,8 @@ function AssetCard({ pair, result, error, loading }) {
                 ? "border-green-200 dark:border-green-900 bg-gradient-to-br from-green-50 dark:from-green-950/40 to-white dark:to-slate-900"
                 : result?.signal === 'SWING_LONG_ALTO_RIESGO'
                 ? "border-orange-200 dark:border-orange-900 bg-gradient-to-br from-orange-50 dark:from-orange-950/40 to-white dark:to-slate-900"
+                : result?.condMet === 2
+                ? "border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50/50 dark:from-amber-950/20 to-white dark:to-slate-900"
                 : "border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900"
         }`}>
 
@@ -487,8 +492,60 @@ function AssetCard({ pair, result, error, loading }) {
                         </div>
                     </div>
 
-                    {/* Reasoning */}
-                    {result.reasoning.length > 0 && (
+                    {/* Links */}
+                    <div className="flex gap-2 mt-3">
+                        <a href={`https://www.bitunix.com/es-es/contract-trade/${meta.symbol}USDT`}
+                           target="_blank" rel="noopener noreferrer"
+                           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition-colors border border-indigo-100 dark:border-indigo-900">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            Bitunix
+                        </a>
+                        <a href={`https://es.tradingview.com/chart/tXjDAvNO/?symbol=BITUNIX%3A${meta.symbol}USDT.P`}
+                           target="_blank" rel="noopener noreferrer"
+                           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-semibold bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors border border-blue-100 dark:border-blue-900">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            TradingView
+                        </a>
+                    </div>
+
+                    {/* Condiciones para confirmar */}
+                    {result.signal === 'ESPERA' && (() => {
+                        const conds = [
+                            { ok: result.isTrendStarting, label: '+DI > −DI y ADX > 20',         desc: 'Tendencia alcista' },
+                            { ok: result.isStochBullish,  label: 'Stoch K > D y K < 50',          desc: 'Estocástico alcista' },
+                            { ok: result.isAdxRising,     label: 'ADX subiendo',                   desc: 'Impulso creciente' },
+                        ];
+                        const met    = conds.filter(c => c.ok).length;
+                        const border = met === 2 ? 'border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20'
+                                                 : 'border-gray-100 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-800/30';
+                        return (
+                            <div className={`rounded-xl border p-3 mt-3 ${border}`}>
+                                <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-2">
+                                    {met}/3 condiciones · {met === 2 ? '⚡ Cerca de señal' : 'Falta para confirmar'}
+                                </p>
+                                <div className="space-y-1.5">
+                                    {conds.map((c, i) => (
+                                        <div key={i} className="flex items-center gap-2">
+                                            <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold flex-shrink-0 ${
+                                                c.ok ? 'bg-green-500 text-white' : 'bg-red-100 dark:bg-red-950 text-red-500 dark:text-red-400'
+                                            }`}>
+                                                {c.ok ? '✓' : '✕'}
+                                            </span>
+                                            <span className={`text-[10px] font-semibold ${c.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                                                {c.desc}
+                                            </span>
+                                            <span className="text-[9px] text-gray-400 dark:text-slate-500 font-mono ml-auto">
+                                                {c.label}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {/* Reasoning (solo señales confirmadas) */}
+                    {result.signal !== 'ESPERA' && result.reasoning.length > 0 && (
                         <ul className="space-y-1">
                             {result.reasoning.map((r, i) => (
                                 <li key={i} className="flex items-start gap-1.5 text-[10px] text-gray-500 dark:text-slate-400">
@@ -585,7 +642,6 @@ export default function ProspectosBitsoPage() {
     };
 
     useEffect(() => {
-        loadAll();
         const scheduleNext = () => {
             const slot = nextSlotTime();
             setNextScanAt(slot);
@@ -662,13 +718,17 @@ export default function ProspectosBitsoPage() {
                     </div>
                 </div>
 
-                {/* Grid de cards — ordenado: SWING LONG → Alto Riesgo → Espera */}
+                {/* Grid de cards — ordenado: SWING LONG → Alto Riesgo → Cerca (2/3) → Espera */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                     {[...PAIRS]
                         .sort((a, b) => {
                             const ra = SIGNAL_RANK[results[a]?.data?.signal ?? 'ESPERA'] ?? 2;
                             const rb = SIGNAL_RANK[results[b]?.data?.signal ?? 'ESPERA'] ?? 2;
-                            return ra - rb;
+                            if (ra !== rb) return ra - rb;
+                            // Dentro de ESPERA: más condiciones cumplidas primero
+                            const ca = results[a]?.data?.condMet ?? 0;
+                            const cb = results[b]?.data?.condMet ?? 0;
+                            return cb - ca;
                         })
                         .map(pair => {
                             const entry = results[pair] ?? { loading: true, data: null, error: null };
