@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 
 // ─── constants ────────────────────────────────────────────────────────────────
-const GAP_MS       = 20_000;                  // 3 por minuto entre requests (4H candles)
+const GAP_MS       = 30_000;                  // 2 por minuto entre requests (4H candles)
 const RETRY_DELAYS = [15_000, 30_000, 60_000]; // backoff en 429
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ function calcStochastic(high, low, close, kPeriod = 14, kSmooth = 3, dSmooth = 3
     };
 }
 
-function analyzePosition(ohlcvData) {
+function analyzePosition(ohlcvData, ohlcvData1d = null) {
     if (ohlcvData.length < 50) return null;
     const close = ohlcvData.map(c => c.close);
     const high  = ohlcvData.map(c => c.high);
@@ -279,7 +279,9 @@ function analyzePosition(ohlcvData) {
     const kc      = calcKC(high, low, close, 20, 20, 1.5);
     const adxArr  = calcADX(high, low, close, adxPeriod);
     const stoch   = calcStochastic(high, low, close, 14, 3, 3);
-    const momentum = calcSqueezeMomentum(high, low, close, 20);
+    const momentum     = calcSqueezeMomentum(high, low, close, 20);
+    // Barra anterior del momentum para detectar si el valle ya giró
+    const momentumPrev = calcSqueezeMomentum(high.slice(0, n - 1), low.slice(0, n - 1), close.slice(0, n - 1), 20);
 
     const cur    = close[n - 1];
     const curEMA = emaArr[emaArr.length - 1];
@@ -289,67 +291,127 @@ function analyzePosition(ohlcvData) {
 
     if (curEMA == null || curBB == null || curKC == null || curADX == null) return null;
 
-    // ADX subiendo con fuerza: comparar contra hace 5 barras, mínimo +1.5 pts de subida
     const ADX_LB    = 5;
     const adxPrev5  = adxArr.length > ADX_LB ? adxArr[adxArr.length - 1 - ADX_LB] : adxArr[0];
     const adxRising = curADX > adxPrev5 && (curADX - adxPrev5) >= 1.5;
 
     const isSqueezeOn   = curBB.upper <= curKC.upper && curBB.lower >= curKC.lower;
-    const isTrendStrong = curADX > 23 && adxRising;
+    const isTrendStrong = curADX > 25 && adxRising;
     const trendDir      = cur > curEMA ? "Alcista" : "Bajista";
 
-    // Zona del estocástico
     const stochZone = stoch.k >= 80 ? "Sobrecompra"
                     : stoch.k <= 20 ? "Sobrevendido"
                     : "Neutral";
 
-    // Dirección del histograma Squeeze Momentum
-    const sqzMomPos = momentum !== null && momentum > 0;  // barra verde (impulso alcista)
-    const sqzMomNeg = momentum !== null && momentum < 0;  // barra roja  (impulso bajista)
+    const sqzMomPos = momentum !== null && momentum > 0;
+    const sqzMomNeg = momentum !== null && momentum < 0;
 
-    // Confirmación doble: estocástico en zona extrema + momentum coincide:
-    //   LONG  → stoch ≤20 (sobrevendido)  + momentum negativo (valle rojo)
-    //   SHORT → stoch ≥80 (sobrecomprado) + momentum positivo (pico verde)
-    const stochConfirmsLong  = stoch.k <= 20 && sqzMomNeg;
-    const stochConfirmsShort = stoch.k >= 80 && sqzMomPos;
-    const stochConfirms      = trendDir === "Alcista" ? stochConfirmsLong : stochConfirmsShort;
+    // ─── Regla 1: Valle desarrollado del Squeeze Momentum ────────────────────
+    // Valle rojo LONG: momentum negativo Y girando al alza (menos negativo que la barra previa)
+    const redValleyDeveloped  = momentum !== null && momentumPrev !== null
+                               && momentum < 0 && momentum > momentumPrev;
+    // Valle verde SHORT: momentum positivo Y girando a la baja (menos positivo que la barra previa)
+    const greenValleyDeveloped = momentum !== null && momentumPrev !== null
+                                && momentum > 0 && momentum < momentumPrev;
 
-    const condSqueeze = !isSqueezeOn;
-    const condTrend   = isTrendStrong;
-    const condStoch   = stochConfirms;
-    const condMet     = (condSqueeze ? 1 : 0) + (condTrend ? 1 : 0) + (condStoch ? 1 : 0);
-    const señalActiva = condMet === 3;
-    const nearSignal  = condMet === 2;
+    // ─── Regla 5: Cercanía al extremo de las últimas 50 velas ────────────────
+    const recentHigh50 = Math.max(...high.slice(-50));
+    const recentLow50  = Math.min(...low.slice(-50));
+    const priceRange50 = recentHigh50 - recentLow50;
+    // "Cerca" = precio dentro del 20% del rango desde el extremo
+    const nearLow50  = priceRange50 > 0 && (cur - recentLow50)  / priceRange50 <= 0.20;
+    const nearHigh50 = priceRange50 > 0 && (recentHigh50 - cur) / priceRange50 <= 0.20;
+
+    // ─── Las 5 condiciones evaluadas independientemente por dirección ─────────
+    const longMet5 = [
+        redValleyDeveloped,  // 1. Valle rojo desarrollado (momentum girando al alza)
+        stoch.k <= 20,       // 2. Estocástico sobrevendido
+        curADX > 25,         // 3. ADX fuerte
+        cur > curEMA,        // 4. Precio sobre EMA50
+        nearLow50,           // 5. Cerca del mínimo de las últimas 50 velas
+    ];
+    const shortMet5 = [
+        greenValleyDeveloped, // 1. Valle verde desarrollado (momentum girando a la baja)
+        stoch.k >= 80,        // 2. Estocástico sobrecomprado
+        curADX > 25,          // 3. ADX fuerte
+        cur < curEMA,         // 4. Precio bajo EMA50
+        nearHigh50,           // 5. Cerca del máximo de las últimas 50 velas
+    ];
+
+    const longMet  = longMet5.filter(Boolean).length;
+    const shortMet = shortMet5.filter(Boolean).length;
+
+    const señalActiva = longMet === 5 || shortMet === 5;
+    const nearSignal  = !señalActiva && (longMet >= 4 || shortMet >= 4);
+
+    // Condiciones activas para la dirección dominante (EMA define LONG vs SHORT)
+    const isLongDir = trendDir === "Alcista";
+    const [condSqzMom, condStoch, condADX, condEMA, condExtreme] =
+        isLongDir ? longMet5 : shortMet5;
+    const condMet = isLongDir ? longMet : shortMet;
+
+    // ── Estocástico 1D (informativo, no puntúa en la señal) ───────────────────
+    let stoch1d = null;
+    if (ohlcvData1d && ohlcvData1d.length >= 20) {
+        const h1d = ohlcvData1d.map(c => c.high);
+        const l1d = ohlcvData1d.map(c => c.low);
+        const c1d = ohlcvData1d.map(c => c.close);
+        stoch1d = calcStochastic(h1d, l1d, c1d, 14, 3, 3);
+    }
+    const stoch1DZone = stoch1d
+        ? (stoch1d.k >= 80 ? "Sobrecompra" : stoch1d.k <= 20 ? "Sobrevendido" : "Neutral")
+        : null;
 
     return {
         adx: curADX, adxRising, isSqueezeOn, isTrendStrong, trendDir, emaValue: curEMA,
-        stochK: stoch.k, stochD: stoch.d, stochConfirms, stochZone,
-        momentum, sqzMomPos, sqzMomNeg,
-        condSqueeze, condTrend, condStoch, condMet,
+        stochK: stoch.k, stochD: stoch.d, stochZone,
+        stoch1DK: stoch1d?.k ?? null, stoch1DZone,
+        momentum, momentumPrev, sqzMomPos, sqzMomNeg,
+        redValleyDeveloped, greenValleyDeveloped,
+        recentHigh50, recentLow50, nearLow50, nearHigh50,
+        condSqzMom, condStoch, condADX, condEMA, condExtreme,
+        condMet, longMet, shortMet,
         señalActiva, nearSignal,
         emaPeriod, adxPeriod, candles: n,
     };
 }
 
 // ─── fetch OHLC con reintentos ─────────────────────────────────────────────────
-// CoinGecko OHLC: days=30 → velas de 4H exactamente (30×6=180 velas)
+// CoinGecko OHLC: days=30 → 4H (~180 velas) · days=365 → 1D (~365 velas)
+// Nota: con el tier gratuito, days<=90 sigue devolviendo velas 4H; days>=91 pasa a diarias.
 async function fetchOHLC(coinId, attempt = 0) {
-    const res = await fetch(
+    const res4h = await fetch(
         `/api/coingecko/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=30`
     );
-    if (res.status === 429) {
+    if (res4h.status === 429) {
         if (attempt < RETRY_DELAYS.length) {
             await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
             return fetchOHLC(coinId, attempt + 1);
         }
         throw new Error("RATE_LIMIT");
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const raw = await res.json();
-    if (!Array.isArray(raw) || raw.length < 50)
-        throw new Error(`insufficient:${Array.isArray(raw) ? raw.length : 0}`);
-    const data   = raw.map(([, , high, low, close]) => ({ high, low, close }));
-    const result = analyzePosition(data);
+    if (!res4h.ok) throw new Error(`HTTP ${res4h.status}`);
+    const raw4h = await res4h.json();
+    if (!Array.isArray(raw4h) || raw4h.length < 50)
+        throw new Error(`insufficient:${Array.isArray(raw4h) ? raw4h.length : 0}`);
+    const data4h = raw4h.map(([, , high, low, close]) => ({ high, low, close }));
+
+    // 1D candles — days=365 garantiza granularidad diaria en el tier gratuito
+    // best-effort: si falla, condStochMultiTF queda false sin romper el scan
+    let data1d = null;
+    try {
+        await new Promise(r => setTimeout(r, 1_200)); // pausa para evitar 429 consecutivo
+        const res1d = await fetch(
+            `/api/coingecko/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=365`
+        );
+        if (res1d.ok) {
+            const raw1d = await res1d.json();
+            if (Array.isArray(raw1d) && raw1d.length >= 20)
+                data1d = raw1d.map(([, , high, low, close]) => ({ high, low, close }));
+        }
+    } catch { /* silencioso — condStochMultiTF quedará false */ }
+
+    const result = analyzePosition(data4h, data1d);
     if (!result) throw new Error("indicators_failed");
     return result;
 }
@@ -418,35 +480,53 @@ function SignalCard({ coin, analysis }) {
                 </span>
             </div>
 
-            {/* Indicators grid 2×2 */}
+            {/* Indicators grid 2×3 — 5 condiciones */}
             <div className="grid grid-cols-2 gap-2">
-                {/* ADX */}
-                <div className="bg-white dark:bg-slate-800 rounded-xl p-2.5 text-center border border-gray-100 dark:border-slate-700">
-                    <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">ADX</p>
-                    <p className={`text-sm font-bold ${analysis.isTrendStrong ? "text-indigo-600 dark:text-indigo-400" : analysis.adxRising ? "text-amber-500 dark:text-amber-400" : "text-gray-500 dark:text-slate-400"}`}>
+                {/* ADX — Regla 3 */}
+                <div className={`rounded-xl p-2.5 text-center border ${
+                    analysis.condADX
+                        ? "bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-800"
+                        : "bg-gray-50 dark:bg-slate-900 border-gray-200 dark:border-slate-700"
+                }`}>
+                    <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">ADX · Fuerza</p>
+                    <p className={`text-sm font-bold ${analysis.condADX ? "text-indigo-600 dark:text-indigo-400" : analysis.adxRising ? "text-amber-500 dark:text-amber-400" : "text-gray-500 dark:text-slate-400"}`}>
                         {analysis.adx}
                     </p>
                     <p className="text-[9px] text-gray-400 dark:text-slate-500">
-                        {analysis.isTrendStrong ? "↑ Subiendo" : analysis.adxRising ? "↑ Arrancando" : "Plano / Débil"}
+                        {analysis.condADX ? "↑ Fuerte >25" : analysis.adxRising ? "↑ Arrancando" : "Débil / Plano"}
                     </p>
                 </div>
-                {/* Squeeze + Momentum */}
-                <div className="bg-white dark:bg-slate-800 rounded-xl p-2.5 text-center border border-gray-100 dark:border-slate-700">
-                    <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">Squeeze</p>
-                    <p className={`text-sm font-bold ${!analysis.isSqueezeOn ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
-                        {analysis.isSqueezeOn ? "🔴" : "🟢"}
+                {/* Valle Squeeze Momentum — Regla 1 */}
+                <div className={`rounded-xl p-2.5 text-center border ${
+                    analysis.condSqzMom
+                        ? "bg-white dark:bg-slate-800 border-green-200 dark:border-green-800"
+                        : "bg-gray-50 dark:bg-slate-900 border-gray-200 dark:border-slate-700"
+                }`}>
+                    <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">Valle SqzMom</p>
+                    <p className={`text-sm font-bold ${
+                        analysis.condSqzMom
+                            ? (isLong ? "text-blue-600 dark:text-blue-400" : "text-orange-500 dark:text-orange-400")
+                            : "text-gray-400 dark:text-slate-500"
+                    }`}>
+                        {analysis.condSqzMom
+                            ? (isLong ? "▼→" : "▲→")
+                            : (isLong ? (analysis.sqzMomNeg ? "▼" : "—") : (analysis.sqzMomPos ? "▲" : "—"))
+                        }
                     </p>
                     <p className={`text-[9px] ${
-                        analysis.isSqueezeOn  ? "text-gray-400 dark:text-slate-500" :
-                        analysis.sqzMomNeg    ? "text-blue-500 dark:text-blue-400" :
-                        analysis.sqzMomPos    ? "text-orange-500 dark:text-orange-400" : "text-gray-400 dark:text-slate-500"
+                        analysis.condSqzMom
+                            ? (isLong ? "text-blue-500 dark:text-blue-400" : "text-orange-500 dark:text-orange-400")
+                            : "text-gray-400 dark:text-slate-500"
                     }`}>
-                        {analysis.isSqueezeOn ? "Activo" :
-                         analysis.sqzMomNeg   ? "▼ Valle rojo" :
-                         analysis.sqzMomPos   ? "▲ Pico verde" : "Liberado"}
+                        {analysis.condSqzMom
+                            ? (isLong ? "Valle rojo ✓" : "Valle verde ✓")
+                            : (isLong
+                                ? (analysis.sqzMomNeg ? "Rojo sin girar" : "Sin valle")
+                                : (analysis.sqzMomPos ? "Verde sin girar" : "Sin valle"))
+                        }
                     </p>
                 </div>
-                {/* EMA */}
+                {/* EMA 50 — Regla 4 */}
                 <div className="bg-white dark:bg-slate-800 rounded-xl p-2.5 text-center border border-gray-100 dark:border-slate-700">
                     <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">
                         EMA {analysis.emaPeriod}
@@ -454,31 +534,71 @@ function SignalCard({ coin, analysis }) {
                     <p className={`text-sm font-bold ${isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
                         {isLong ? "▲" : "▼"} ${fmt(analysis.emaValue, analysis.emaValue != null && analysis.emaValue < 1 ? 5 : 2)}
                     </p>
-                    <p className="text-[9px] text-gray-400 dark:text-slate-500">{analysis.trendDir}</p>
+                    <p className="text-[9px] text-gray-400 dark:text-slate-500">{isLong ? "Precio > EMA" : "Precio < EMA"}</p>
                 </div>
-                {/* Estocástico (14, 3, 3) */}
+                {/* Estocástico — Regla 2 */}
                 <div className={`rounded-xl p-2.5 text-center border ${
-                    analysis.stochConfirms
-                        ? "bg-white dark:bg-slate-800 border-gray-100 dark:border-slate-700"
+                    analysis.condStoch
+                        ? "bg-white dark:bg-slate-800 border-green-200 dark:border-green-800"
                         : "bg-gray-50 dark:bg-slate-900 border-gray-200 dark:border-slate-700"
                 }`}>
                     <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">
-                        Estoc. 14,3,3
+                        Estocástico
                     </p>
                     <p className={`text-sm font-bold ${
-                        analysis.stochConfirms
+                        analysis.condStoch
                             ? (isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400")
                             : "text-gray-400 dark:text-slate-500"
                     }`}>
                         {fmt(analysis.stochK, 1)}
+                        {analysis.stoch1DK != null ? <span className="text-[9px] font-normal opacity-60"> / {fmt(analysis.stoch1DK, 1)}</span> : ""}
                     </p>
                     <p className={`text-[9px] ${
-                        analysis.stochZone === "Sobrecompra"  ? "text-orange-500 dark:text-orange-400" :
-                        analysis.stochZone === "Sobrevendido" ? "text-blue-500 dark:text-blue-400" : "text-gray-400 dark:text-slate-500"
+                        analysis.condStoch
+                            ? (isLong ? "text-blue-500 dark:text-blue-400" : "text-orange-500 dark:text-orange-400")
+                            : "text-gray-400 dark:text-slate-500"
                     }`}>
-                        {analysis.stochZone}
+                        {analysis.stochZone}{analysis.stoch1DZone ? ` · ${analysis.stoch1DZone}` : ""}
                     </p>
                 </div>
+                {/* Extremo 50 velas — Regla 5 */}
+                <div className={`col-span-2 rounded-xl p-2.5 border flex items-center justify-between ${
+                    analysis.condExtreme
+                        ? "bg-white dark:bg-slate-800 border-green-200 dark:border-green-800"
+                        : "bg-gray-50 dark:bg-slate-900 border-gray-200 dark:border-slate-700"
+                }`}>
+                    <div>
+                        <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide">Extremo 50 velas</p>
+                        <p className={`text-[10px] mt-0.5 font-semibold ${
+                            analysis.condExtreme
+                                ? (isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400")
+                                : "text-gray-400 dark:text-slate-500"
+                        }`}>
+                            {analysis.condExtreme
+                                ? (isLong ? "✓ Cerca del mínimo 50v" : "✓ Cerca del máximo 50v")
+                                : (isLong ? "Lejos del mínimo 50v" : "Lejos del máximo 50v")
+                            }
+                        </p>
+                    </div>
+                    <p className="text-[9px] text-gray-400 dark:text-slate-500 text-right shrink-0">
+                        {isLong
+                            ? `Mín $${fmt(analysis.recentLow50, analysis.recentLow50 < 1 ? 5 : 2)}`
+                            : `Máx $${fmt(analysis.recentHigh50, analysis.recentHigh50 < 1 ? 5 : 2)}`
+                        }
+                    </p>
+                </div>
+            </div>
+
+            {/* Confirmation strip */}
+            <div className="mt-3">
+                <div className="flex gap-1 mb-1.5">
+                    {[0,1,2,3,4].map(i => (
+                        <span key={i} className="flex-1 h-1 rounded-full bg-green-400 dark:bg-green-500" />
+                    ))}
+                </div>
+                <p className={`text-[10px] font-semibold ${isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
+                    ✓ Las 5 condiciones cumplidas — Entrar en apertura de vela 4H
+                </p>
             </div>
 
             {/* Links */}
@@ -507,73 +627,75 @@ function NearCard({ coin, analysis }) {
     const isLong = analysis.trendDir === "Alcista";
     const sym    = coin.symbol.toUpperCase();
     const conds  = [
-        { label: "Squeeze libre",    ok: analysis.condSqueeze },
-        { label: "ADX fuerte ↑",     ok: analysis.condTrend   },
-        { label: isLong ? "Stoch sobrevendido + valle rojo" : "Stoch sobrecomprado + pico verde",
-          ok: analysis.condStoch },
+        { label: isLong ? "Valle rojo desarrollado" : "Valle verde desarrollado", ok: analysis.condSqzMom   },
+        { label: isLong ? "Estoc. sobrevendido <20" : "Estoc. sobrecomprado >80", ok: analysis.condStoch    },
+        { label: "ADX fuerte (>25)",                                               ok: analysis.condADX      },
+        { label: isLong ? "Precio > EMA50" : "Precio < EMA50",                    ok: analysis.condEMA      },
+        { label: isLong ? "Cerca mínimo 50v" : "Cerca máximo 50v",                ok: analysis.condExtreme  },
     ];
-    const missing = conds.find(c => !c.ok);
+    const missing = conds.filter(c => !c.ok);
 
     return (
-        <div className="flex flex-col items-center gap-3 bg-white dark:bg-slate-900 rounded-xl
+        <div className="flex flex-col gap-2.5 bg-white dark:bg-slate-900 rounded-xl
                         border border-gray-100 dark:border-slate-800 p-3 hover:border-indigo-200
                         dark:hover:border-indigo-800 transition-colors">
-            
-            <div className="w-full flex justify-between gap-5">
-                {/* Image */}
-                {coin.image
-                    ? <img src={coin.image} alt={sym} className="w-8 h-8 rounded-full flex-shrink-0"
-                        onError={e => e.target.style.display='none'} />
-                    : <div className="w-8 h-8 rounded-full bg-gray-100 dark:bg-slate-700 flex-shrink-0" />
-                }
 
-                {/* Name + direction */}
-                <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                        <span className="font-bold text-gray-800 dark:text-slate-100 text-xs truncate">{sym}</span>
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                            isLong ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
-                                : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"
-                        }`}>
-                            {isLong ? "▲ L" : "▼ S"}
-                        </span>
-                    </div>
-                    {missing && (
-                        <p className="text-[9px] text-amber-600 dark:text-amber-400 truncate mt-0.5">
-                            Falta: {missing.label}
-                        </p>
-                    )}
+            <div className="flex items-center justify-between gap-2">
+                {/* Image + Name + direction */}
+                <div className="flex items-center gap-2 min-w-0">
+                    {coin.image
+                        ? <img src={coin.image} alt={sym} className="w-7 h-7 rounded-full flex-shrink-0"
+                            onError={e => e.target.style.display='none'} />
+                        : <div className="w-7 h-7 rounded-full bg-gray-100 dark:bg-slate-700 flex-shrink-0" />
+                    }
+                    <span className="font-bold text-gray-800 dark:text-slate-100 text-xs truncate">{sym}</span>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                        isLong ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
+                               : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"
+                    }`}>
+                        {isLong ? "▲ L" : "▼ S"}
+                    </span>
                 </div>
-            </div>
 
-            <div className="w-full flex justify-between">
-                {/* Condition dots */}
-                <div className="flex gap-1 flex-shrink-0">
-                    {conds.map((c, i) => (
-                        <div key={i} title={c.label}
-                            className={`w-2 h-2 rounded-full ${c.ok ? "bg-green-500" : "bg-gray-200 dark:bg-slate-600"}`} />
-                    ))}
-                </div>
-                {/* ADX */}
-                <span className="text-[10px] font-mono text-indigo-500 dark:text-indigo-400 flex-shrink-0 w-10 text-right">
-                    {fmt(analysis.adx, 1)}
-                </span>
-
-                {/* Links */}
-                <div className="flex gap-1 flex-shrink-0">
+                {/* ADX + Links */}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-[10px] font-mono text-indigo-500 dark:text-indigo-400">
+                        {fmt(analysis.adx, 1)}
+                    </span>
                     <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
-                    target="_blank" rel="noopener noreferrer"
-                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded
-                                bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 hover:opacity-80">
+                       target="_blank" rel="noopener noreferrer"
+                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded
+                                  bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 hover:opacity-80">
                         BX
                     </a>
                     <a href={`https://es.tradingview.com/chart/tXjDAvNO/?symbol=BITUNIX%3A${sym}USDT.P`}
-                    target="_blank" rel="noopener noreferrer"
-                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded
-                                bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:opacity-80">
+                       target="_blank" rel="noopener noreferrer"
+                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded
+                                  bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:opacity-80">
                         TV
                     </a>
                 </div>
+            </div>
+
+            {/* Progress bar + missing condition */}
+            <div>
+                <div className="flex gap-1 mb-1">
+                    {conds.map((c, i) => (
+                        <span key={i} title={c.label}
+                              className={`flex-1 h-1 rounded-full ${c.ok ? "bg-green-400 dark:bg-green-500" : "bg-amber-300 dark:bg-amber-600"}`}
+                        />
+                    ))}
+                </div>
+                {missing.length > 0 ? (
+                    <p className="text-[9px] text-amber-600 dark:text-amber-400 leading-snug">
+                        <span className="font-semibold">Falta: </span>
+                        {missing.map(c => c.label).join(" · ")}
+                    </p>
+                ) : (
+                    <p className="text-[9px] font-semibold text-green-600 dark:text-green-400">
+                        ✓ Listo para entrada
+                    </p>
+                )}
             </div>
         </div>
     );
@@ -1096,10 +1218,10 @@ export default function ProspectosPage() {
                                 {nearSignals.length}
                             </span>
                             <span className="text-xs text-gray-400 dark:text-slate-500">
-                                · 2 de 3 condiciones cumplidas
+                                · 4 de 5 condiciones cumplidas
                             </span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {nearSignals.map(coin => (
                                 <NearCard key={coin.id} coin={coin}
                                           analysis={analysisCache[coin.id].data} />

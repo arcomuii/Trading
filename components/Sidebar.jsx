@@ -77,6 +77,17 @@ const links = [
       </svg>
     ),
   },
+  {
+    href: '/patrones',
+    label: 'Patrones',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="12 2 22 20 2 20" />
+        <line x1="12" y1="10" x2="12" y2="15" />
+        <line x1="9" y1="15" x2="15" y2="15" />
+      </svg>
+    ),
+  },
 ]
 
 function SunIcon() {
