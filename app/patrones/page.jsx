@@ -16,16 +16,6 @@ function msUntilNextSlot() {
     next.setDate(next.getDate() + 1); next.setHours(SCAN_SLOTS[0], 0, 0, 0);
     return next - now;
 }
-function nextSlotTime() {
-    const now = new Date();
-    for (const h of SCAN_SLOTS) {
-        const d = new Date(now); d.setHours(h, 0, 0, 0);
-        if (d > now) return d;
-    }
-    const next = new Date(now);
-    next.setDate(next.getDate() + 1); next.setHours(SCAN_SLOTS[0], 0, 0, 0);
-    return next;
-}
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 async function requestNotifPermission() {
@@ -200,11 +190,21 @@ function detectPattern(candles) {
         ? Math.round(bandEnd / candleConvergence / 6)
         : null;
 
+    const recSlice      = consolSlice.slice(-5);
+    const recCloses     = recSlice.map(c => c.close);
+    const recLows       = recSlice.map(c => c.low);
+    const recHighs      = recSlice.map(c => c.high);
+    const aboveResCount = recCloses.filter(c => c > hEnd * 1.003).length;
+    const belowSupCount = recCloses.filter(c => c < lEnd * 0.997).length;
+    const retestBull    = recLows.some((l, i)  => l <= hEnd * 1.025 && recCloses[i] > hEnd * 1.001);
+    const retestBear    = recHighs.some((h, i) => h >= lEnd * 0.975 && recCloses[i] < lEnd * 0.999);
+
     const base = {
         compression, normH, normL, hR2: hReg.r2, lR2: lReg.r2,
         hEnd, lEnd, avgPrice, quality, pricePos,
         curPrice, poleMovePct: hasPole ? poleMovePct : null,
         daysToApex,
+        aboveResCount, belowSupCount, retestBull, retestBear,
     };
 
     // ─── Flags & Pennants (require prior pole) ────────────────────────────────
@@ -237,25 +237,147 @@ function detectPattern(candles) {
     return null;
 }
 
+// ─── Cup and Handle Detection ─────────────────────────────────────────────────
+function detectCupHandle(candles) {
+    const CUP_LEN    = 90;  // ~15 days in 4H
+    const HANDLE_LEN = 20;  // ~3.3 days in 4H
+    const PRIOR_LEN  = 20;  // prior uptrend window
+    if (candles.length < CUP_LEN + HANDLE_LEN + PRIOR_LEN) return null;
+
+    const priorSlice  = candles.slice(-(CUP_LEN + HANDLE_LEN + PRIOR_LEN), -(CUP_LEN + HANDLE_LEN));
+    const cupSlice    = candles.slice(-(CUP_LEN + HANDLE_LEN), -HANDLE_LEN);
+    const handleSlice = candles.slice(-HANDLE_LEN);
+
+    // 1. Prior bullish trend (at least 5% up)
+    const priorFirst = priorSlice[0].close;
+    const priorLast  = priorSlice[priorSlice.length - 1].close;
+    if (priorLast <= priorFirst * 1.05) return null;
+    const priorHigh    = Math.max(...priorSlice.map(c => c.high));
+    const priorLow     = Math.min(...priorSlice.map(c => c.low));
+    const priorMovePct = (priorHigh - priorLow) / priorLow * 100;
+
+    // 2. Cup: find left rim, bottom, right rim in thirds
+    const t = Math.floor(CUP_LEN / 3);
+    const leftThird  = cupSlice.slice(0, t);
+    const midThird   = cupSlice.slice(t, 2 * t);
+    const rightThird = cupSlice.slice(2 * t);
+
+    const leftRim   = Math.max(...leftThird.map(c => c.high));
+    const cupBottom = Math.min(...midThird.map(c => c.low));
+    const rightRim  = Math.max(...rightThird.map(c => c.high));
+
+    // 3. Rim symmetry (within 18%)
+    const rimAvg  = (leftRim + rightRim) / 2;
+    const rimDiff = Math.abs(rightRim - leftRim) / rimAvg;
+    if (rimDiff > 0.18) return null;
+
+    // 4. Cup depth 18-62% of rim
+    const cupHeight   = rimAvg - cupBottom;
+    if (cupHeight <= 0) return null;
+    const cupDepthPct = cupHeight / rimAvg;
+    if (cupDepthPct < 0.18 || cupDepthPct > 0.62) return null;
+
+    // 5. U-shape: bottom must be lower than both side thirds
+    const leftMin  = Math.min(...leftThird.map(c => c.low));
+    const rightMin = Math.min(...rightThird.map(c => c.low));
+    if (cupBottom >= leftMin || cupBottom >= rightMin) return null;
+
+    // 6. U-shape: several candles near the bottom (not a V)
+    const bottomZone    = cupBottom + cupHeight * 0.25;
+    const bottomCandles = midThird.filter(c => c.low <= bottomZone).length;
+    if (bottomCandles < 3) return null;
+
+    // 7. Handle: small pullback, must not exceed 45% of cup height, must stay above cup bottom
+    const handleHigh  = Math.max(...handleSlice.map(c => c.high));
+    const handleLow   = Math.min(...handleSlice.map(c => c.low));
+    const handleDepth = rightRim - handleLow;
+    if (handleDepth <= 0)                     return null;
+    if (handleHigh > rightRim * 1.03)         return null;  // handle broke out already
+    if (handleDepth > cupHeight * 0.45)       return null;  // handle too deep
+    if (handleLow < cupBottom)                return null;  // handle below cup
+
+    // 8. Breakout metrics (last 5 candles of handle)
+    const recSlice      = handleSlice.slice(-5);
+    const recCloses     = recSlice.map(c => c.close);
+    const recLows       = recSlice.map(c => c.low);
+    const aboveResCount = recCloses.filter(c => c > rightRim * 1.003).length;
+    const retestBull    = recLows.some((l, i) => l <= rightRim * 1.025 && recCloses[i] > rightRim * 1.001);
+
+    // 9. Metrics
+    const curPrice   = candles[candles.length - 1].close;
+    const handleRange = Math.max(rightRim - handleLow, 0.0001);
+    const pricePos    = Math.max(0, Math.min(1.5, (curPrice - handleLow) / handleRange));
+    const symScore    = 1 - rimDiff / 0.18;
+    const depthScore  = cupDepthPct >= 0.28 && cupDepthPct <= 0.52 ? 1.0 : 0.65;
+    const quality     = symScore * 0.5 + depthScore * 0.5;
+    const compression = 1 - (handleDepth / cupHeight);  // higher = tighter handle
+
+    return {
+        type: 'cup_handle',
+        leftRim, rightRim, cupBottom, handleLow,
+        cupHeight, cupDepthPct, handleDepth,
+        hEnd: rightRim,
+        lEnd: handleLow,
+        curPrice, pricePos, compression, quality,
+        daysToApex: null,
+        poleMovePct: priorMovePct,
+        aboveResCount, belowSupCount: 0, retestBull, retestBear: false,
+        normH: 0, normL: 0, hR2: quality, lR2: quality, avgPrice: rimAvg,
+    };
+}
+
 // ─── Pattern metadata ─────────────────────────────────────────────────────────
 const PATTERN_META = {
-    symmetrical_triangle: { label: "Triángulo Simétrico",   cat: "triangle", bias: "neutral",  dir: "→" },
-    ascending_triangle:   { label: "Triángulo Ascendente",  cat: "triangle", bias: "bullish",  dir: "↑" },
-    descending_triangle:  { label: "Triángulo Descendente", cat: "triangle", bias: "bearish",  dir: "↓" },
-    rising_wedge:         { label: "Cuña Ascendente",       cat: "wedge",    bias: "bearish",  dir: "↓" },
-    falling_wedge:        { label: "Cuña Descendente",      cat: "wedge",    bias: "bullish",  dir: "↑" },
-    bullish_flag:         { label: "Bandera Alcista",       cat: "flag",     bias: "bullish",  dir: "↑" },
-    bearish_flag:         { label: "Bandera Bajista",       cat: "flag",     bias: "bearish",  dir: "↓" },
-    bullish_pennant:      { label: "Banderín Alcista",      cat: "flag",     bias: "bullish",  dir: "↑" },
-    bearish_pennant:      { label: "Banderín Bajista",      cat: "flag",     bias: "bearish",  dir: "↓" },
+    cup_handle:           { label: "Taza y Asa",             cat: "cup",      bias: "bullish",  dir: "↑" },
+    symmetrical_triangle: { label: "Triángulo Simétrico",    cat: "triangle", bias: "neutral",  dir: "→" },
+    ascending_triangle:   { label: "Triángulo Ascendente",   cat: "triangle", bias: "bullish",  dir: "↑" },
+    descending_triangle:  { label: "Triángulo Descendente",  cat: "triangle", bias: "bearish",  dir: "↓" },
+    rising_wedge:         { label: "Cuña Ascendente",        cat: "wedge",    bias: "bearish",  dir: "↓" },
+    falling_wedge:        { label: "Cuña Descendente",       cat: "wedge",    bias: "bullish",  dir: "↑" },
+    bullish_flag:         { label: "Bandera Alcista",        cat: "flag",     bias: "bullish",  dir: "↑" },
+    bearish_flag:         { label: "Bandera Bajista",        cat: "flag",     bias: "bearish",  dir: "↓" },
+    bullish_pennant:      { label: "Banderín Alcista",       cat: "flag",     bias: "bullish",  dir: "↑" },
+    bearish_pennant:      { label: "Banderín Bajista",       cat: "flag",     bias: "bearish",  dir: "↓" },
 };
 
 // ─── Entry checklist ─────────────────────────────────────────────────────────
+const PATTERN_COND_RISK = [15, 20, 30, 25, 30, 35];
+
 function getEntryConditions(result) {
+    const dec = result.hEnd < 1 ? 4 : 2;
+
+    if (result.type === 'cup_handle') {
+        return [
+            {
+                label: "Taza bien formada (simetría y profundidad 20-62%)",
+                ok:    result.quality >= 0.55 && result.cupDepthPct >= 0.20,
+            },
+            {
+                label: "Asa poco profunda (≤ 45% de la taza)",
+                ok:    result.handleDepth <= result.cupHeight * 0.45,
+            },
+            {
+                label: `Tendencia previa alcista (movimiento ≥10%)`,
+                ok:    result.poleMovePct != null && result.poleMovePct >= 10,
+            },
+            {
+                label: "Precio en zona del asa o resistencia",
+                ok:    result.pricePos >= 0.55,
+            },
+            {
+                label: `Ruptura sobre $${fmt(result.hEnd, dec)}`,
+                ok:    result.curPrice > result.hEnd * 1.003,
+            },
+            {
+                label: result.retestBull ? "Retest del nivel confirmado" : "Ruptura sostenida (≥2 cierres)",
+                ok:    result.aboveResCount >= 2 || result.retestBull,
+            },
+        ];
+    }
+
     const meta   = PATTERN_META[result.type] ?? {};
     const isBull = meta.bias === "bullish";
     const isBear = meta.bias === "bearish";
-    const dec    = result.hEnd < 1 ? 4 : 2;
     return [
         {
             label: "Patrón bien formado",
@@ -285,34 +407,103 @@ function getEntryConditions(result) {
                 : isBear ? result.curPrice < result.lEnd * 0.997
                          : result.curPrice > result.hEnd * 1.003 || result.curPrice < result.lEnd * 0.997,
         },
+        {
+            label: isBull ? (result.retestBull ? "Retest del nivel confirmado" : "Ruptura sostenida (≥2 cierres)")
+                 : isBear ? (result.retestBear ? "Retest del nivel confirmado" : "Ruptura sostenida (≥2 cierres)")
+                           : "Ruptura confirmada",
+            ok:   isBull ? (result.aboveResCount >= 2 || result.retestBull)
+                : isBear ? (result.belowSupCount >= 2 || result.retestBear)
+                         : (result.aboveResCount >= 2 || result.retestBull ||
+                            result.belowSupCount >= 2 || result.retestBear),
+        },
     ];
 }
 
-function EntryChecklist({ result }) {
+function calcLevels(result) {
+    const meta   = PATTERN_META[result.type] ?? {};
+    const isBull = meta.bias === "bullish";
+    const isBear = meta.bias === "bearish";
+    if (!isBull && !isBear) return null;
+
+    const channelH = result.hEnd - result.lEnd;
+    if (channelH <= 0) return null;
+    const patternH = channelH / Math.max(0.05, 1 - result.compression);
+
+    let entry, sl, tp;
+
+    if (result.type === 'cup_handle') {
+        entry = result.hEnd * 1.003;
+        sl    = result.lEnd * 0.985;
+        tp    = result.hEnd + (result.leftRim - result.cupBottom);
+    } else if (isBull) {
+        entry = result.hEnd * 1.003;
+        sl    = result.lEnd * 0.985;
+        tp    = result.poleMovePct != null
+            ? entry * (1 + result.poleMovePct / 100)
+            : entry + patternH;
+    } else {
+        entry = result.lEnd * 0.997;
+        sl    = result.hEnd * 1.015;
+        tp    = result.poleMovePct != null
+            ? entry * (1 - result.poleMovePct / 100)
+            : entry - patternH;
+    }
+
+    const risk   = Math.abs(entry - sl);
+    const reward = Math.abs(tp - entry);
+    const rr     = risk > 0 ? reward / risk : 0;
+    return { entry, sl, tp, rr, isBull };
+}
+
+function EntryChecklist({ result, showScore = false }) {
     const conds   = getEntryConditions(result);
+    const met     = conds.filter(c => c.ok).length;
+    const total   = conds.length;
+    const pct     = Math.round((met / total) * 100);
     const missing = conds.filter(c => !c.ok);
+    const allMet  = met === total;
+
+    const scoreColor = allMet         ? "text-green-600 dark:text-green-400"
+                     : pct >= 67      ? "text-amber-500 dark:text-amber-400"
+                                      : "text-red-500 dark:text-red-400";
+    const barColor   = (c) => c.ok
+        ? "bg-green-400 dark:bg-green-500"
+        : "bg-red-200 dark:bg-red-900";
+
     return (
         <div>
-            {/* 5-segment progress bar */}
-            <div className="flex gap-1 mb-1.5">
-                {conds.map((c, i) => (
-                    <span key={i} title={c.label}
-                          className={`flex-1 h-1 rounded-full transition-colors ${
-                              c.ok ? "bg-green-400 dark:bg-green-500"
-                                   : "bg-gray-200 dark:bg-slate-600"
-                          }`}
-                    />
-                ))}
+            {/* Score row */}
+            <div className="flex items-center gap-2 mb-1.5">
+                <div className="flex gap-0.5 flex-1">
+                    {conds.map((c, i) => (
+                        <span key={i} title={c.label}
+                              className={`flex-1 h-1.5 rounded-full transition-colors ${barColor(c)}`}
+                        />
+                    ))}
+                </div>
+                <span className={`text-[11px] font-bold tabular-nums leading-none ${scoreColor}`}>
+                    {met}/{total}
+                </span>
+                {showScore && (
+                    <span className={`text-[10px] font-semibold tabular-nums leading-none ${scoreColor}`}>
+                        {pct}%
+                    </span>
+                )}
             </div>
-            {missing.length === 0 ? (
+            {/* Condition chips */}
+            {allMet ? (
                 <p className="text-[10px] font-semibold text-green-600 dark:text-green-400">
-                    ✓ Listo para entrada
+                    ✓ Todas las condiciones cumplidas
                 </p>
             ) : (
-                <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-snug">
-                    <span className="font-semibold">Falta: </span>
-                    {missing.map(c => c.label).join(" · ")}
-                </p>
+                <div className="flex flex-wrap gap-1">
+                    {missing.map((c, i) => (
+                        <span key={i}
+                              className="text-[9px] bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900 px-1.5 py-0.5 rounded-full leading-none">
+                            ✗ {c.label}
+                        </span>
+                    ))}
+                </div>
             )}
         </div>
     );
@@ -346,6 +537,20 @@ function PatternIcon({ type }) {
     };
 
     const icons = {
+        cup_handle: (
+            <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+                {/* Cup U-shape fill */}
+                <path d="M4,8 C6,40 44,40 46,8 L46,8 L4,8" fill="rgba(34,197,94,0.08)" stroke="none" />
+                {/* Cup U-shape outline */}
+                <path d="M4,8 C6,40 44,40 46,8" fill="none" stroke={gr} strokeWidth="1.6" />
+                {/* Horizontal rim reference */}
+                <line x1="4" y1="8" x2="46" y2="8" stroke={gr} strokeWidth="1" strokeDasharray="2,2" opacity="0.4" />
+                {/* Handle: small dip */}
+                <polyline points="46,8 49,18 54,12" fill="none" stroke={gr} strokeWidth="1.4" strokeLinejoin="round" />
+                {/* Breakout arrow */}
+                <Arrow x1={54} y1={12} x2={62} y2={3} color={cy} />
+            </svg>
+        ),
         symmetrical_triangle: (
             <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
                 <line x1="4" y1="7"  x2="44" y2="22" stroke={ug} strokeWidth="1.5" strokeDasharray="3,2" />
@@ -450,7 +655,7 @@ async function fetchPatterns(coinId, attempt = 0) {
         throw new Error(`insufficient:${Array.isArray(raw) ? raw.length : 0}`);
     // CoinGecko OHLC format: [timestamp, open, high, low, close]
     const data = raw.map(([, , high, low, close]) => ({ high, low, close }));
-    return detectPattern(data);  // may return null = no pattern
+    return detectCupHandle(data) ?? detectPattern(data);
 }
 
 async function cancellableWait(ms, abortRef) {
@@ -478,34 +683,81 @@ function PatternCard({ coin, result }) {
     const imminentApex = result.daysToApex !== null && result.daysToApex <= 8;
     const isNearBreakout = nearBreakout || imminentApex;
 
+    const brokeOut = isBull
+        ? result.curPrice > result.hEnd * 1.003
+        : isBear
+        ? result.curPrice < result.lEnd * 0.997
+        : result.curPrice > result.hEnd * 1.003 || result.curPrice < result.lEnd * 0.997;
+    const breakConfirmed = isBull
+        ? (result.aboveResCount >= 2 || result.retestBull)
+        : isBear
+        ? (result.belowSupCount >= 2 || result.retestBear)
+        : (result.aboveResCount >= 2 || result.retestBull || result.belowSupCount >= 2 || result.retestBear);
+
+    const conds  = getEntryConditions(result);
+    const allMet = conds.every(c => c.ok);
+
+    const borderCls = allMet
+        ? "border-amber-400 dark:border-amber-500 ring-2 ring-amber-200 dark:ring-amber-900"
+        : isBull ? "border-green-200 dark:border-green-900"
+        : isBear ? "border-red-200 dark:border-red-900"
+                 : "border-indigo-200 dark:border-indigo-900";
+    const bgCls = allMet
+        ? isBull ? "bg-gradient-to-br from-green-50 dark:from-green-950/80 to-amber-50/60 dark:to-amber-950/20"
+        : isBear ? "bg-gradient-to-br from-red-50 dark:from-red-950/80 to-amber-50/60 dark:to-amber-950/20"
+                 : "bg-gradient-to-br from-indigo-50 dark:from-indigo-950/80 to-amber-50/60 dark:to-amber-950/20"
+        : isBull ? "bg-gradient-to-br from-green-50 dark:from-green-950 to-white dark:to-slate-900"
+        : isBear ? "bg-gradient-to-br from-red-50 dark:from-red-950 to-white dark:to-slate-900"
+                 : "bg-gradient-to-br from-indigo-50 dark:from-indigo-950 to-white dark:to-slate-900";
+
     return (
-        <div className={`rounded-2xl border-2 p-4 ${
-            isBull ? "border-green-200 dark:border-green-900 bg-gradient-to-br from-green-50 dark:from-green-950 to-white dark:to-slate-900"
-          : isBear ? "border-red-200 dark:border-red-900 bg-gradient-to-br from-red-50 dark:from-red-950 to-white dark:to-slate-900"
-                   : "border-indigo-200 dark:border-indigo-900 bg-gradient-to-br from-indigo-50 dark:from-indigo-950 to-white dark:to-slate-900"
-        }`}>
-            {/* Badge row */}
-            <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-                        isBull ? "bg-green-500 text-white"
-                      : isBear ? "bg-red-500 text-white"
-                               : "bg-indigo-500 text-white"
-                    }`}>
-                        {meta.dir} {meta.label}
+        <div className={`rounded-2xl border-2 p-4 ${borderCls} ${bgCls}`}>
+            {/* LONG / SHORT direction — prominent */}
+            <div className={`flex items-center justify-between mb-3 rounded-xl px-3 py-2 ${
+                isBull ? "bg-green-500 dark:bg-green-600"
+              : isBear ? "bg-red-500 dark:bg-red-600"
+                       : "bg-indigo-500 dark:bg-indigo-600"
+            }`}>
+                <div className="flex items-center gap-2">
+                    <span className="text-base font-black text-white tracking-widest">
+                        {isBull ? "▲ LONG" : isBear ? "▼ SHORT" : "→ NEUTRAL"}
                     </span>
-                    {isNearBreakout && (
+                    <span className="text-[10px] font-semibold text-white/75">
+                        {meta.label}
+                    </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                    {allMet && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400 text-white">
+                            ⭐ {conds.length}/{conds.length}
+                        </span>
+                    )}
+                    {pct != null && (
+                        <span className={`text-xs font-semibold ${pct >= 0 ? "text-green-200" : "text-red-200"}`}>
+                            {pct >= 0 ? "+" : ""}{fmt(pct)}%
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            {/* Breakout status */}
+            {(breakConfirmed || brokeOut || isNearBreakout) && (
+                <div className="flex gap-1.5 mb-3 flex-wrap">
+                    {breakConfirmed ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-500 text-white">
+                            ✓✓ Ruptura confirmada
+                        </span>
+                    ) : brokeOut ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500 text-white animate-pulse">
+                            ✓ Ruptura detectada
+                        </span>
+                    ) : (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400 text-white animate-pulse">
                             ⚡ Cerca del quiebre
                         </span>
                     )}
                 </div>
-                {pct != null && (
-                    <span className={`text-xs font-semibold shrink-0 ${pct >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
-                        {pct >= 0 ? "+" : ""}{fmt(pct)}%
-                    </span>
-                )}
-            </div>
+            )}
 
             {/* Coin + Icon */}
             <div className="flex items-center gap-3 mb-4">
@@ -587,8 +839,60 @@ function PatternCard({ coin, result }) {
             {/* Entry checklist */}
             <div className="mb-3 px-1">
                 <p className="text-[9px] text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1.5">Confirmar entrada</p>
-                <EntryChecklist result={result} />
+                <EntryChecklist result={result} showScore={true} />
             </div>
+
+            {/* Entry / TP / SL — always shown; highlighted when all conditions met */}
+            {(() => {
+                const lv  = calcLevels(result);
+                if (!lv) return null;
+                const dec   = result.hEnd < 1 ? 5 : result.hEnd < 10 ? 4 : 2;
+                const rrCls = lv.rr >= 2   ? "text-green-600 dark:text-green-400"
+                            : lv.rr >= 1.2 ? "text-amber-500 dark:text-amber-400"
+                                           : "text-red-500 dark:text-red-400";
+                const containerCls = allMet
+                    ? "mb-3 rounded-xl p-3 bg-amber-50 dark:bg-amber-950/30 border-2 border-amber-300 dark:border-amber-700"
+                    : "mb-3 rounded-xl p-3 bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 opacity-70";
+                return (
+                    <div className={containerCls}>
+                        <p className={`text-[9px] font-semibold uppercase tracking-wide mb-2 ${
+                            allMet ? "text-amber-600 dark:text-amber-400" : "text-gray-400 dark:text-slate-500"
+                        }`}>
+                            {allMet ? "✓ Niveles confirmados" : "Niveles estimados"}
+                        </p>
+                        <div className="grid grid-cols-3 gap-2 mb-1.5">
+                            <div className={`rounded-lg p-2 text-center border ${
+                                allMet ? "bg-indigo-100 dark:bg-indigo-900/50 border-indigo-300 dark:border-indigo-700"
+                                       : "bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800"}`}>
+                                <p className="text-[9px] font-semibold text-indigo-500 dark:text-indigo-400 uppercase tracking-wide mb-0.5">Entrada</p>
+                                <p className={`font-bold font-mono leading-tight ${allMet ? "text-sm text-indigo-700 dark:text-indigo-200" : "text-[11px] text-indigo-700 dark:text-indigo-300"}`}>
+                                    ${fmt(lv.entry, dec)}
+                                </p>
+                            </div>
+                            <div className={`rounded-lg p-2 text-center border ${
+                                allMet ? "bg-green-100 dark:bg-green-900/50 border-green-300 dark:border-green-700"
+                                       : "bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-800"}`}>
+                                <p className="text-[9px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide mb-0.5">TP</p>
+                                <p className={`font-bold font-mono leading-tight ${allMet ? "text-sm text-green-700 dark:text-green-200" : "text-[11px] text-green-700 dark:text-green-300"}`}>
+                                    ${fmt(lv.tp, dec)}
+                                </p>
+                            </div>
+                            <div className={`rounded-lg p-2 text-center border ${
+                                allMet ? "bg-red-100 dark:bg-red-900/50 border-red-300 dark:border-red-700"
+                                       : "bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800"}`}>
+                                <p className="text-[9px] font-semibold text-red-500 dark:text-red-400 uppercase tracking-wide mb-0.5">SL</p>
+                                <p className={`font-bold font-mono leading-tight ${allMet ? "text-sm text-red-700 dark:text-red-200" : "text-[11px] text-red-700 dark:text-red-300"}`}>
+                                    ${fmt(lv.sl, dec)}
+                                </p>
+                            </div>
+                        </div>
+                        <p className={`text-[9px] font-bold text-center ${rrCls}`}>
+                            R:R 1:{fmt(lv.rr, 1)}
+                            {lv.rr >= 2 ? " · Favorable" : lv.rr >= 1.2 ? " · Aceptable" : " · Bajo"}
+                        </p>
+                    </div>
+                );
+            })()}
 
             {/* Links */}
             <div className="flex gap-2 pt-3 border-t border-gray-100 dark:border-slate-700">
@@ -632,7 +936,19 @@ function BreakoutCard({ coin, result }) {
                 urgency === "med"  ? "bg-amber-400" : "bg-indigo-300"
             }`} />
 
-            <div className="flex items-start gap-3 mt-1">
+            {/* LONG / SHORT — prominent strip */}
+            <div className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 mb-2 mt-1 ${
+                isBull ? "bg-green-500 dark:bg-green-600"
+              : isBear ? "bg-red-500 dark:bg-red-600"
+                       : "bg-indigo-500 dark:bg-indigo-600"
+            }`}>
+                <span className="text-sm font-black text-white tracking-widest">
+                    {isBull ? "▲ LONG" : isBear ? "▼ SHORT" : "→ NEUTRAL"}
+                </span>
+                <span className="text-[9px] font-semibold text-white/75">{meta.label}</span>
+            </div>
+
+            <div className="flex items-start gap-3">
                 <PatternIcon type={result.type} />
 
                 <div className="flex-1 min-w-0">
@@ -643,11 +959,6 @@ function BreakoutCard({ coin, result }) {
                                  onError={e => e.target.style.display='none'} />
                         )}
                         <span className="font-bold text-gray-800 dark:text-slate-100 text-sm">{sym}</span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            isBull ? "bg-green-500 text-white" : isBear ? "bg-red-500 text-white" : "bg-indigo-500 text-white"
-                        }`}>
-                            {meta.dir} {meta.label}
-                        </span>
                     </div>
 
                     {/* Price */}
@@ -670,13 +981,6 @@ function BreakoutCard({ coin, result }) {
                         <span className="text-[10px] px-2 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-semibold">
                             {Math.round(result.compression * 100)}% compresión
                         </span>
-                        <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${
-                            isBull ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400"
-                          : isBear ? "bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400"
-                                   : "bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400"
-                        }`}>
-                            {isBull ? "↑ Alcista" : isBear ? "↓ Bajista" : "→ Neutral"}
-                        </span>
                     </div>
                 </div>
 
@@ -694,8 +998,49 @@ function BreakoutCard({ coin, result }) {
 
             {/* Entry checklist */}
             <div className="mt-3 pt-2 border-t border-gray-100 dark:border-slate-700">
-                <EntryChecklist result={result} />
+                <EntryChecklist result={result} showScore={true} />
             </div>
+
+            {/* Entry / TP / SL for BreakoutCard */}
+            {(() => {
+                const lv    = calcLevels(result);
+                const conds = getEntryConditions(result);
+                const allMet = conds.every(c => c.ok);
+                if (!lv) return null;
+                const dec   = result.hEnd < 1 ? 5 : result.hEnd < 10 ? 4 : 2;
+                const rrCls = lv.rr >= 2   ? "text-green-600 dark:text-green-400"
+                            : lv.rr >= 1.2 ? "text-amber-500 dark:text-amber-400"
+                                           : "text-red-500 dark:text-red-400";
+                return (
+                    <div className={`mt-2 rounded-xl p-2.5 border ${
+                        allMet ? "bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700"
+                               : "bg-gray-50 dark:bg-slate-800/50 border-gray-200 dark:border-slate-700 opacity-70"
+                    }`}>
+                        <p className={`text-[9px] font-semibold uppercase tracking-wide mb-1.5 ${
+                            allMet ? "text-amber-600 dark:text-amber-400" : "text-gray-400 dark:text-slate-500"
+                        }`}>
+                            {allMet ? "✓ Niveles confirmados" : "Niveles estimados"}
+                        </p>
+                        <div className="grid grid-cols-3 gap-1.5 mb-1">
+                            <div className="rounded-lg p-1.5 text-center bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800">
+                                <p className="text-[8px] font-semibold text-indigo-500 uppercase tracking-wide">Entrada</p>
+                                <p className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 font-mono">${fmt(lv.entry, dec)}</p>
+                            </div>
+                            <div className="rounded-lg p-1.5 text-center bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800">
+                                <p className="text-[8px] font-semibold text-green-600 uppercase tracking-wide">TP</p>
+                                <p className="text-[10px] font-bold text-green-700 dark:text-green-300 font-mono">${fmt(lv.tp, dec)}</p>
+                            </div>
+                            <div className="rounded-lg p-1.5 text-center bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800">
+                                <p className="text-[8px] font-semibold text-red-500 uppercase tracking-wide">SL</p>
+                                <p className="text-[10px] font-bold text-red-700 dark:text-red-300 font-mono">${fmt(lv.sl, dec)}</p>
+                            </div>
+                        </div>
+                        <p className={`text-[8px] font-bold text-center ${rrCls}`}>
+                            R:R 1:{fmt(lv.rr, 1)}
+                        </p>
+                    </div>
+                );
+            })()}
 
             {/* Links */}
             <div className="flex gap-2 mt-2">
@@ -717,6 +1062,7 @@ function BreakoutCard({ coin, result }) {
 // ─── PatronesPage ─────────────────────────────────────────────────────────────
 const FILTER_TABS = [
     { key: "all",      label: "Todos" },
+    { key: "cup",      label: "Taza y Asa" },
     { key: "triangle", label: "Triángulos" },
     { key: "wedge",    label: "Cuñas" },
     { key: "flag",     label: "Banderas / Banderines" },
@@ -731,7 +1077,6 @@ export default function PatronesPage() {
     const [progress,       setProgress]       = useState({ done: 0, total: 0 });
     const [scanRunning,    setScanRunning]     = useState(false);
     const [lastScan,       setLastScan]        = useState(null);
-    const [nextScanAt,     setNextScanAt]      = useState(null);
     const [currentCoin,    setCurrentCoin]    = useState(null);
     const [activeFilter,   setActiveFilter]   = useState("all");
     const [showCoverage,   setShowCoverage]   = useState(false);
@@ -746,12 +1091,6 @@ export default function PatronesPage() {
         });
     }, []);
 
-    // Live countdown to next scheduled scan
-    const [countdown, setCountdown] = useState(() => fmtCountdown(msUntilNextSlot()));
-    useEffect(() => {
-        const id = setInterval(() => setCountdown(fmtCountdown(msUntilNextSlot())), 30_000);
-        return () => clearInterval(id);
-    }, []);
 
     // 1. Load Bitunix symbols
     useEffect(() => {
@@ -782,7 +1121,12 @@ export default function PatronesPage() {
             setLoadingCoins(true);
             try {
                 const mktBase = "/api/coingecko/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&price_change_percentage=24h&page=";
-                const pages   = await Promise.all([1, 2, 3].map(p => fetch(mktBase + p).then(r => r.json())));
+                const pages = [];
+                for (const p of [1, 2, 3]) {
+                    const r = await fetch(mktBase + p);
+                    pages.push(await r.json());
+                    if (p < 3) await new Promise(res => setTimeout(res, 20_000));
+                }
                 const top750  = pages.flat().filter(c => c?.id);
                 let matched   = bitunixSymbols.size > 0
                     ? top750.filter(c => bitunixSymbols.has(c.symbol.toUpperCase()))
@@ -815,7 +1159,7 @@ export default function PatronesPage() {
                                     }
                                 });
                             }
-                            if (i + 100 < extraIds.length) await new Promise(r => setTimeout(r, 1_200));
+                            if (i + 100 < extraIds.length) await new Promise(r => setTimeout(r, 20_000));
                         }
                     }
                 }
@@ -829,11 +1173,7 @@ export default function PatronesPage() {
         load();
     }, [bitunixSymbols]);
 
-    // 3. Auto-start scan when coins are loaded
-    useEffect(() => {
-        if (coins.length === 0 || loadingCoins) return;
-        runScan(coins);
-    }, [coins]); // eslint-disable-line
+    // Scan inicia solo con el botón "Actualizar ahora"
 
     // Cleanup
     useEffect(() => () => { abortRef.current = true; }, []);
@@ -880,21 +1220,9 @@ export default function PatronesPage() {
                 await cancellableWait(GAP_MS, abortRef);
         }
 
-        if (!abortRef.current) {
-            setCurrentCoin(null);
-            setLastScan(new Date());
-            const slot = nextSlotTime();
-            setNextScanAt(slot);
-            setScanRunning(false);
-            // Wait until next scheduled slot then re-scan automatically
-            await cancellableWait(msUntilNextSlot(), abortRef);
-            if (!abortRef.current) {
-                setNextScanAt(null);
-                runScan(coinsList);
-            }
-        } else {
-            setScanRunning(false);
-        }
+        setCurrentCoin(null);
+        setLastScan(new Date());
+        setScanRunning(false);
     };
 
     const restartScan = () => {
@@ -904,8 +1232,15 @@ export default function PatronesPage() {
 
     // ─── Derive displayed patterns ────────────────────────────────────────────
     const allPatterns = coins
-        .filter(c => analysisCache[c.id]?.data != null)
+        .filter(c => {
+            if (!analysisCache[c.id]?.data) return false;
+            const conds = getEntryConditions(analysisCache[c.id].data);
+            return conds.every(x => x.ok);
+        })
         .sort((a, b) => {
+            const ca = getEntryConditions(analysisCache[a.id].data).filter(c => c.ok).length;
+            const cb = getEntryConditions(analysisCache[b.id].data).filter(c => c.ok).length;
+            if (cb !== ca) return cb - ca;
             const qa = analysisCache[a.id].data.compression * analysisCache[a.id].data.quality;
             const qb = analysisCache[b.id].data.compression * analysisCache[b.id].data.quality;
             return qb - qa;
@@ -917,6 +1252,7 @@ export default function PatronesPage() {
 
     const countByTab = {
         all:      allPatterns.length,
+        cup:      allPatterns.filter(c => PATTERN_META[analysisCache[c.id].data.type]?.cat === "cup").length,
         triangle: allPatterns.filter(c => PATTERN_META[analysisCache[c.id].data.type]?.cat === "triangle").length,
         wedge:    allPatterns.filter(c => PATTERN_META[analysisCache[c.id].data.type]?.cat === "wedge").length,
         flag:     allPatterns.filter(c => PATTERN_META[analysisCache[c.id].data.type]?.cat === "flag").length,
@@ -939,7 +1275,7 @@ export default function PatronesPage() {
                 <div className="mb-8">
                     <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión</h1>
                     <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
-                        Detección automática en gráfico 4H · Triángulos · Cuñas · Banderas · Banderines
+                        Detección automática en gráfico 4H · Taza y Asa · Triángulos · Cuñas · Banderas · Banderines
                     </p>
                     <div className="flex items-center gap-3 mt-3 flex-wrap">
                         {bitunixSymbols === null ? (
@@ -968,18 +1304,11 @@ export default function PatronesPage() {
                                 Último: {lastScan.toLocaleTimeString("es-MX", { hour: '2-digit', minute: '2-digit' })}
                             </span>
                         )}
-                        <span className="text-xs font-medium text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 border border-indigo-100 dark:border-indigo-900 px-2.5 py-1 rounded-full flex items-center gap-1.5">
-                            <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-                            </svg>
-                            {scanRunning ? "Actualizando…" : (
-                                <>
-                                    {nextSlotTime().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
-                                    <span className="text-indigo-400 dark:text-indigo-500">·</span>
-                                    en {countdown}
-                                </>
-                            )}
-                        </span>
+                        {lastScan && (
+                            <span className="text-xs text-gray-400 dark:text-slate-500">
+                                Último: {lastScan.toLocaleTimeString("es-MX", { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                        )}
                         <button
                             onClick={restartScan}
                             disabled={scanRunning}
@@ -1241,11 +1570,16 @@ export default function PatronesPage() {
 
                 {/* ─── Results grid ─────────────────────────────────────────── */}
                 {filtered.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
-                        {filtered.map(coin => (
-                            <PatternCard key={coin.id} coin={coin} result={analysisCache[coin.id].data} />
-                        ))}
-                    </div>
+                    <>
+                        <div className="text-xs font-semibold text-amber-600 dark:text-amber-400 mb-4 flex items-center gap-2">
+                            <span>⭐ Señales confirmadas · {filtered.length} activo{filtered.length !== 1 ? "s" : ""}</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                            {filtered.map(c => (
+                                <PatternCard key={c.id} coin={c} result={analysisCache[c.id].data} />
+                            ))}
+                        </div>
+                    </>
                 )}
 
                 {/* ─── Empty filtered ───────────────────────────────────────── */}
@@ -1260,10 +1594,11 @@ export default function PatronesPage() {
                 {/* ─── Scan complete, no patterns ───────────────────────────── */}
                 {!initialLoad && !scanRunning && lastScan && allPatterns.length === 0 && (
                     <div className="text-center py-20">
-                        <div className="text-5xl mb-4">📊</div>
-                        <p className="font-semibold text-gray-600 dark:text-slate-300 text-lg">Sin patrones detectados</p>
-                        <p className="text-sm text-gray-400 dark:text-slate-500 mt-2">
-                            Ningún activo muestra compresión significativa en 1D en este momento
+                        <div className="text-5xl mb-4">🔍</div>
+                        <p className="font-semibold text-gray-600 dark:text-slate-300 text-lg">Sin señales confirmadas</p>
+                        <p className="text-sm text-gray-400 dark:text-slate-500 mt-2 max-w-sm mx-auto">
+                            Ningún activo cumplió con todas las condiciones de entrada en este scan.
+                            Intenta de nuevo más tarde.
                         </p>
                         <button onClick={restartScan}
                             className="mt-6 bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors">

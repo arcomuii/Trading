@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
+import { ALLOWED_SYMBOLS } from "../../lib/allowedSymbols";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 const GAP_MS       = 30_000;                  // 2 por minuto entre requests (4H candles)
@@ -322,13 +323,16 @@ function analyzePosition(ohlcvData, ohlcvData1d = null) {
     const nearLow50  = priceRange50 > 0 && (cur - recentLow50)  / priceRange50 <= 0.20;
     const nearHigh50 = priceRange50 > 0 && (recentHigh50 - cur) / priceRange50 <= 0.20;
 
-    // ─── Las 5 condiciones evaluadas independientemente por dirección ─────────
+    // ─── Las 6 condiciones evaluadas independientemente por dirección ─────────
+    const condConfirmLong  = stoch.k > stoch.d && adxRising; // K cruzó sobre D + ADX en ascenso
+    const condConfirmShort = stoch.k < stoch.d && adxRising; // K cruzó bajo D + ADX en ascenso
     const longMet5 = [
         redValleyDeveloped,  // 1. Valle rojo desarrollado (momentum girando al alza)
         stoch.k <= 20,       // 2. Estocástico sobrevendido
         curADX > 25,         // 3. ADX fuerte
         cur > curEMA,        // 4. Precio sobre EMA50
         nearLow50,           // 5. Cerca del mínimo de las últimas 50 velas
+        condConfirmLong,     // 6. Confirmación de entrada (K>D + ADX ascendente)
     ];
     const shortMet5 = [
         greenValleyDeveloped, // 1. Valle verde desarrollado (momentum girando a la baja)
@@ -336,17 +340,18 @@ function analyzePosition(ohlcvData, ohlcvData1d = null) {
         curADX > 25,          // 3. ADX fuerte
         cur < curEMA,         // 4. Precio bajo EMA50
         nearHigh50,           // 5. Cerca del máximo de las últimas 50 velas
+        condConfirmShort,     // 6. Confirmación de entrada (K<D + ADX ascendente)
     ];
 
     const longMet  = longMet5.filter(Boolean).length;
     const shortMet = shortMet5.filter(Boolean).length;
 
-    const señalActiva = longMet === 5 || shortMet === 5;
-    const nearSignal  = !señalActiva && (longMet >= 4 || shortMet >= 4);
+    const señalActiva = longMet === 6 || shortMet === 6;
+    const nearSignal  = !señalActiva && (longMet >= 5 || shortMet >= 5);
 
     // Condiciones activas para la dirección dominante (EMA define LONG vs SHORT)
     const isLongDir = trendDir === "Alcista";
-    const [condSqzMom, condStoch, condADX, condEMA, condExtreme] =
+    const [condSqzMom, condStoch, condADX, condEMA, condExtreme, condConfirm] =
         isLongDir ? longMet5 : shortMet5;
     const condMet = isLongDir ? longMet : shortMet;
 
@@ -369,7 +374,7 @@ function analyzePosition(ohlcvData, ohlcvData1d = null) {
         momentum, momentumPrev, sqzMomPos, sqzMomNeg,
         redValleyDeveloped, greenValleyDeveloped,
         recentHigh50, recentLow50, nearLow50, nearHigh50,
-        condSqzMom, condStoch, condADX, condEMA, condExtreme,
+        condSqzMom, condStoch, condADX, condEMA, condExtreme, condConfirm,
         condMet, longMet, shortMet,
         señalActiva, nearSignal,
         emaPeriod, adxPeriod, candles: n,
@@ -425,24 +430,57 @@ async function cancellableWait(ms, abortRef) {
     }
 }
 
+// ─── Entry / TP / SL para señales de momentum ────────────────────────────────
+// Entry = precio actual (apertura de siguiente vela 4H)
+// SL    = justo bajo/sobre el extremo de las últimas 50 velas
+// TP    = extremo opuesto del rango de 50 velas
+function calcProspectLevels(coin, analysis) {
+    const price = coin.current_price;
+    if (!price || !analysis.recentLow50 || !analysis.recentHigh50) return null;
+    const isLong = analysis.trendDir === "Alcista";
+    const range  = analysis.recentHigh50 - analysis.recentLow50;
+    if (range <= 0) return null;
+
+    let entry, sl, tp;
+    if (isLong) {
+        entry = price;
+        sl    = analysis.recentLow50  * 0.985;
+        tp    = analysis.recentHigh50;
+    } else {
+        entry = price;
+        sl    = analysis.recentHigh50 * 1.015;
+        tp    = analysis.recentLow50;
+    }
+
+    const risk   = Math.abs(entry - sl);
+    const reward = Math.abs(tp - entry);
+    const rr     = risk > 0 ? reward / risk : 0;
+    return { entry, sl, tp, rr, isLong };
+}
+
 // ─── SignalCard ────────────────────────────────────────────────────────────────
 function SignalCard({ coin, analysis }) {
     const isLong = analysis.trendDir === "Alcista";
     const pct    = coin.price_change_percentage_24h;
 
     return (
-        <div className={`rounded-2xl border-2 p-4 ${
+        <div className={`rounded-2xl border-2 p-4 ring-2 ring-amber-200 dark:ring-amber-900 ${
             isLong
-                ? "border-green-200 dark:border-green-900 bg-gradient-to-br from-green-50 dark:from-green-950 to-white dark:to-slate-900"
-                : "border-red-200 dark:border-red-900 bg-gradient-to-br from-red-50 dark:from-red-950 to-white dark:to-slate-900"
+                ? "border-amber-400 dark:border-amber-500 bg-gradient-to-br from-green-50 dark:from-green-950/80 to-amber-50/60 dark:to-amber-950/20"
+                : "border-amber-400 dark:border-amber-500 bg-gradient-to-br from-red-50 dark:from-red-950/80 to-amber-50/60 dark:to-amber-950/20"
         }`}>
             {/* Badge + % 24h */}
             <div className="flex items-center justify-between mb-3">
-                <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold tracking-wide ${
-                    isLong ? "bg-green-500 text-white" : "bg-red-500 text-white"
-                }`}>
-                    {isLong ? "▲ LONG" : "▼ SHORT"}
-                </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold tracking-wide ${
+                        isLong ? "bg-green-500 text-white" : "bg-red-500 text-white"
+                    }`}>
+                        {isLong ? "▲ LONG" : "▼ SHORT"}
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400 text-white">
+                        ⭐ 6/6
+                    </span>
+                </div>
                 {pct != null && (
                     <span className={`text-xs font-semibold ${pct >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
                         {pct >= 0 ? "+" : ""}{fmt(pct)}%
@@ -562,42 +600,99 @@ function SignalCard({ coin, analysis }) {
                     </p>
                 </div>
                 {/* Extremo 50 velas — Regla 5 */}
-                <div className={`col-span-2 rounded-xl p-2.5 border flex items-center justify-between ${
+                <div className={`rounded-xl p-2.5 text-center border ${
                     analysis.condExtreme
                         ? "bg-white dark:bg-slate-800 border-green-200 dark:border-green-800"
                         : "bg-gray-50 dark:bg-slate-900 border-gray-200 dark:border-slate-700"
                 }`}>
-                    <div>
-                        <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide">Extremo 50 velas</p>
-                        <p className={`text-[10px] mt-0.5 font-semibold ${
-                            analysis.condExtreme
-                                ? (isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400")
-                                : "text-gray-400 dark:text-slate-500"
-                        }`}>
-                            {analysis.condExtreme
-                                ? (isLong ? "✓ Cerca del mínimo 50v" : "✓ Cerca del máximo 50v")
-                                : (isLong ? "Lejos del mínimo 50v" : "Lejos del máximo 50v")
-                            }
-                        </p>
-                    </div>
-                    <p className="text-[9px] text-gray-400 dark:text-slate-500 text-right shrink-0">
+                    <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">Extremo 50v</p>
+                    <p className={`text-sm font-bold ${
+                        analysis.condExtreme
+                            ? (isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400")
+                            : "text-gray-400 dark:text-slate-500"
+                    }`}>
+                        {analysis.condExtreme ? "✓" : "✗"}
+                    </p>
+                    <p className={`text-[9px] ${
+                        analysis.condExtreme
+                            ? (isLong ? "text-green-500 dark:text-green-400" : "text-red-500 dark:text-red-400")
+                            : "text-gray-400 dark:text-slate-500"
+                    }`}>
                         {isLong
                             ? `Mín $${fmt(analysis.recentLow50, analysis.recentLow50 < 1 ? 5 : 2)}`
                             : `Máx $${fmt(analysis.recentHigh50, analysis.recentHigh50 < 1 ? 5 : 2)}`
                         }
                     </p>
                 </div>
+                {/* Confirmación entrada — Regla 6 */}
+                <div className={`rounded-xl p-2.5 text-center border ${
+                    analysis.condConfirm
+                        ? "bg-white dark:bg-slate-800 border-violet-200 dark:border-violet-800"
+                        : "bg-gray-50 dark:bg-slate-900 border-gray-200 dark:border-slate-700"
+                }`}>
+                    <p className="text-[9px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">Confirmación</p>
+                    <p className={`text-sm font-bold ${
+                        analysis.condConfirm
+                            ? "text-violet-600 dark:text-violet-400"
+                            : "text-gray-400 dark:text-slate-500"
+                    }`}>
+                        {analysis.condConfirm ? (isLong ? "K>D ↑" : "K<D ↓") : "—"}
+                    </p>
+                    <p className={`text-[9px] ${
+                        analysis.condConfirm
+                            ? "text-violet-500 dark:text-violet-400"
+                            : "text-gray-400 dark:text-slate-500"
+                    }`}>
+                        {analysis.condConfirm
+                            ? "ADX ↑ ✓"
+                            : (isLong ? "K<D o ADX plano" : "K>D o ADX plano")
+                        }
+                    </p>
+                </div>
             </div>
+
+            {/* Entry / TP / SL */}
+            {(() => {
+                const lv = calcProspectLevels(coin, analysis);
+                if (!lv) return null;
+                const dec = lv.entry < 1 ? 5 : lv.entry < 10 ? 4 : 2;
+                const rrCls = lv.rr >= 2   ? "text-green-600 dark:text-green-400"
+                            : lv.rr >= 1.2 ? "text-amber-500 dark:text-amber-400"
+                                           : "text-red-500 dark:text-red-400";
+                return (
+                    <div className="mt-3">
+                        <p className="text-[9px] text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1.5">Niveles sugeridos</p>
+                        <div className="grid grid-cols-3 gap-2 mb-1.5">
+                            <div className="rounded-xl p-2 text-center border bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800">
+                                <p className="text-[9px] font-semibold text-indigo-500 dark:text-indigo-400 uppercase tracking-wide mb-0.5">Entrada</p>
+                                <p className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 font-mono leading-tight">${fmt(lv.entry, dec)}</p>
+                            </div>
+                            <div className="rounded-xl p-2 text-center border bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-800">
+                                <p className="text-[9px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide mb-0.5">TP</p>
+                                <p className="text-[11px] font-bold text-green-700 dark:text-green-300 font-mono leading-tight">${fmt(lv.tp, dec)}</p>
+                            </div>
+                            <div className="rounded-xl p-2 text-center border bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800">
+                                <p className="text-[9px] font-semibold text-red-500 dark:text-red-400 uppercase tracking-wide mb-0.5">SL</p>
+                                <p className="text-[11px] font-bold text-red-700 dark:text-red-300 font-mono leading-tight">${fmt(lv.sl, dec)}</p>
+                            </div>
+                        </div>
+                        <p className={`text-[9px] font-bold text-center ${rrCls}`}>
+                            R:R 1:{fmt(lv.rr, 1)}
+                            {lv.rr >= 2 ? " · Favorable" : lv.rr >= 1.2 ? " · Aceptable" : " · Bajo"}
+                        </p>
+                    </div>
+                );
+            })()}
 
             {/* Confirmation strip */}
             <div className="mt-3">
                 <div className="flex gap-1 mb-1.5">
-                    {[0,1,2,3,4].map(i => (
+                    {[0,1,2,3,4,5].map(i => (
                         <span key={i} className="flex-1 h-1 rounded-full bg-green-400 dark:bg-green-500" />
                     ))}
                 </div>
                 <p className={`text-[10px] font-semibold ${isLong ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
-                    ✓ Las 5 condiciones cumplidas — Entrar en apertura de vela 4H
+                    ✓ Las 6 condiciones cumplidas — Entrar en apertura de vela 4H
                 </p>
             </div>
 
@@ -623,17 +718,36 @@ function SignalCard({ coin, analysis }) {
 }
 
 // ─── NearCard ─────────────────────────────────────────────────────────────────
+// Riesgo adicional estimado cuando falta cada condición
+const COND_RISK = [
+    { key: "condSqzMom",  pct: 40 }, // señal principal de momentum
+    { key: "condEMA",     pct: 35 }, // filtro de tendencia
+    { key: "condADX",     pct: 25 }, // fuerza de tendencia
+    { key: "condConfirm", pct: 30 }, // confirmación K>D + ADX
+    { key: "condStoch",   pct: 20 }, // timing de entrada
+    { key: "condExtreme", pct: 15 }, // posición en el rango
+];
+const BASE_FAIL = 15; // tasa de fallo base con las 6 condiciones
+
 function NearCard({ coin, analysis }) {
     const isLong = analysis.trendDir === "Alcista";
     const sym    = coin.symbol.toUpperCase();
     const conds  = [
-        { label: isLong ? "Valle rojo desarrollado" : "Valle verde desarrollado", ok: analysis.condSqzMom   },
-        { label: isLong ? "Estoc. sobrevendido <20" : "Estoc. sobrecomprado >80", ok: analysis.condStoch    },
-        { label: "ADX fuerte (>25)",                                               ok: analysis.condADX      },
-        { label: isLong ? "Precio > EMA50" : "Precio < EMA50",                    ok: analysis.condEMA      },
-        { label: isLong ? "Cerca mínimo 50v" : "Cerca máximo 50v",                ok: analysis.condExtreme  },
+        { label: isLong ? "Valle rojo desarrollado" : "Valle verde desarrollado", ok: analysis.condSqzMom,  key: "condSqzMom"  },
+        { label: isLong ? "Estoc. sobrevendido <20" : "Estoc. sobrecomprado >80", ok: analysis.condStoch,   key: "condStoch"   },
+        { label: "ADX fuerte (>25)",                                               ok: analysis.condADX,     key: "condADX"     },
+        { label: isLong ? "Precio > EMA50" : "Precio < EMA50",                    ok: analysis.condEMA,     key: "condEMA"     },
+        { label: isLong ? "Cerca mínimo 50v" : "Cerca máximo 50v",                ok: analysis.condExtreme, key: "condExtreme" },
+        { label: isLong ? "K>D + ADX ascendente" : "K<D + ADX ascendente",        ok: analysis.condConfirm, key: "condConfirm" },
     ];
-    const missing = conds.filter(c => !c.ok);
+    const missing    = conds.filter(c => !c.ok);
+    const failPct    = Math.min(95, BASE_FAIL + missing.reduce((acc, c) => {
+        const r = COND_RISK.find(r => r.key === c.key);
+        return acc + (r?.pct ?? 20);
+    }, 0));
+    const failColor  = failPct >= 60
+        ? "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800"
+        : "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950 border-amber-200 dark:border-amber-800";
 
     return (
         <div className="flex flex-col gap-2.5 bg-white dark:bg-slate-900 rounded-xl
@@ -687,10 +801,20 @@ function NearCard({ coin, analysis }) {
                     ))}
                 </div>
                 {missing.length > 0 ? (
-                    <p className="text-[9px] text-amber-600 dark:text-amber-400 leading-snug">
-                        <span className="font-semibold">Falta: </span>
-                        {missing.map(c => c.label).join(" · ")}
-                    </p>
+                    <>
+                        <p className="text-[9px] text-amber-600 dark:text-amber-400 leading-snug">
+                            <span className="font-semibold">Falta: </span>
+                            {missing.map(c => c.label).join(" · ")}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-1">
+                            <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border ${failColor}`}>
+                                ⚠ ~{failPct}% fallo
+                            </span>
+                            <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800">
+                                ✓ ~{100 - failPct}% éxito
+                            </span>
+                        </div>
+                    </>
                 ) : (
                     <p className="text-[9px] font-semibold text-green-600 dark:text-green-400">
                         ✓ Listo para entrada
@@ -737,6 +861,7 @@ export default function ProspectosPage() {
                 list.forEach(c => {
                     const raw = (c.baseCoin ?? c.symbol?.replace(/USDT$|USDC$|BUSD$|PERP$/i, '') ?? '').toUpperCase();
                     if (!raw) return;
+                    if (!ALLOWED_SYMBOLS.has(raw)) return;
                     symbols.add(raw);
                     // Bitunix usa prefijos "1000X" para micro-cap (ej. 1000PEPE → PEPE)
                     const stripped = raw.replace(/^1000/, '');
@@ -976,8 +1101,21 @@ export default function ProspectosPage() {
                         <span className="text-xs font-medium text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 border border-indigo-100 dark:border-indigo-900 px-2.5 py-1 rounded-full">
                             Próximo scan: {nextSlotTime().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
                         </span>
+                        <button
+                            onClick={restartScan}
+                            disabled={initialLoad}
+                            className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full
+                                       bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800
+                                       text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            {scanRunning
+                                ? <><svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Reiniciando…</>
+                                : <><svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg> Actualizar ahora</>
+                            }
+                        </button>
                     </div>
                 </div>
+
 
                 {/* ─── Cobertura Bitunix vs CoinGecko ─────────────────────── */}
                 {!initialLoad && bitunixSymbols && bitunixSymbols.size > 0 && (

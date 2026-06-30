@@ -7,6 +7,8 @@ const DEFAULT_STOCKS = [
     { symbol: "VOLARA.MX",   label: "VOLAR/A",    name: "Volar" },
 ];
 
+//31 1.43
+
 const LS_PORTFOLIO = "bmv_portfolio";
 const LS_CUSTOM    = "bmv_custom_stocks";
 
@@ -603,7 +605,8 @@ function SqzScannerSection() {
     const [lastScan,    setLastScan]    = useState(null);
     const [progress,    setProgress]    = useState({ done: 0, total: 0 });
     const [countdown,   setCountdown]   = useState(() => sqzFmtCd(sqzMsToSlot()));
-    const abortRef = useRef(false);
+    const abortRef  = useRef(false);
+    const scanIdRef = useRef(0);
 
     useEffect(() => {
         const id = setInterval(() => setCountdown(sqzFmtCd(sqzMsToSlot())), 30_000);
@@ -612,43 +615,44 @@ function SqzScannerSection() {
 
     useEffect(() => {
         runScan();
-        return () => { abortRef.current = true; };
+        return () => { abortRef.current = true; scanIdRef.current++; };
     }, []); // eslint-disable-line
 
     async function runScan() {
         abortRef.current = false;
+        const myId = ++scanIdRef.current;
         setResults({});
         setProgress({ done: 0, total: BMV_SCAN_LIST.length });
         setScanRunning(true);
 
         for (let i = 0; i < BMV_SCAN_LIST.length; i++) {
-            if (abortRef.current) break;
+            if (abortRef.current || scanIdRef.current !== myId) break;
             const stock = BMV_SCAN_LIST[i];
             setResults(prev => ({ ...prev, [stock.symbol]: { loading: true } }));
             try {
                 const data = await fetchBMVWeekly(stock.symbol);
-                if (!abortRef.current)
+                if (scanIdRef.current === myId)
                     setResults(prev => ({ ...prev, [stock.symbol]: { ...data, loading: false } }));
             } catch (err) {
-                if (!abortRef.current)
+                if (scanIdRef.current === myId)
                     setResults(prev => ({ ...prev, [stock.symbol]: { error: true, loading: false } }));
             }
-            if (!abortRef.current) setProgress(prev => ({ ...prev, done: prev.done + 1 }));
-            if (i < BMV_SCAN_LIST.length - 1 && !abortRef.current)
+            if (scanIdRef.current === myId) setProgress(prev => ({ ...prev, done: prev.done + 1 }));
+            if (i < BMV_SCAN_LIST.length - 1 && scanIdRef.current === myId)
                 await new Promise(r => setTimeout(r, 1_500));
         }
 
-        if (!abortRef.current) {
+        if (scanIdRef.current === myId && !abortRef.current) {
             setLastScan(new Date());
             setScanRunning(false);
             await sqzWait(sqzMsToSlot(), abortRef);
-            if (!abortRef.current) runScan();
-        } else {
+            if (scanIdRef.current === myId && !abortRef.current) runScan();
+        } else if (scanIdRef.current === myId) {
             setScanRunning(false);
         }
     }
 
-    function restart() { abortRef.current = true; setTimeout(runScan, 150); }
+    function restart() { abortRef.current = true; scanIdRef.current++; setTimeout(runScan, 150); }
 
     const redDev   = BMV_SCAN_LIST.filter(s => results[s.symbol]?.redValleyDeveloped);
     const greenDev = BMV_SCAN_LIST.filter(s => results[s.symbol]?.greenValleyDeveloped);
