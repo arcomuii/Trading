@@ -21,6 +21,14 @@ function upsertSnapshot(equity) {
     return out
 }
 
+// ── date helpers ──────────────────────────────────────────────
+function mondayOf(date) {
+    const d   = new Date(date)
+    const day = d.getDay() // 0=Dom..6=Sáb
+    d.setDate(d.getDate() + (day === 0 ? -6 : 1) - day)
+    return d.toISOString().slice(0, 10)
+}
+
 // ── formatters ────────────────────────────────────────────────
 const fmt  = (v, d = 2) => {
     const n = parseFloat(v)
@@ -47,11 +55,19 @@ function computeMetrics(history, equity) {
     const d30 = new Date(); d30.setDate(d30.getDate() - 30)
     const base30 = sorted.find(e => e.date >= d30.toISOString().slice(0, 10)) ?? sorted[0]
 
+    const monday    = mondayOf(new Date())
+    const fridayDt  = new Date(`${monday}T00:00:00`)
+    fridayDt.setDate(fridayDt.getDate() + 4)
+    const friday    = fridayDt.toISOString().slice(0, 10)
+    const firstWeek = sorted.find(e => e.date >= monday && e.date <= friday)
+
     return {
         dailyPnl:   yesterday ? equity - yesterday.equity : null,
+        weeklyPnl:  firstWeek ? equity - firstWeek.equity : null,
         monthlyPnl: firstMon  ? equity - firstMon.equity  : null,
         pnl30:      base30    ? equity - base30.equity     : null,
         baseDaily:  yesterday?.equity ?? null,
+        baseWeek:   firstWeek?.equity ?? null,
         baseMonth:  firstMon?.equity  ?? null,
         base30:     base30?.equity    ?? null,
     }
@@ -256,7 +272,7 @@ export default function DashboardPage() {
         return () => clearInterval(iv)
     }, [])
 
-    const { dailyPnl, monthlyPnl, pnl30, baseDaily, baseMonth, base30 } =
+    const { dailyPnl, weeklyPnl, monthlyPnl, pnl30, baseDaily, baseWeek, baseMonth, base30 } =
         computeMetrics(history, equity)
 
     const pct = (pnl, base) =>
@@ -265,6 +281,12 @@ export default function DashboardPage() {
     const now    = new Date()
     const month  = now.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
     const monthN = now.toLocaleDateString('es-MX', { month: 'long' })
+
+    const monday      = mondayOf(now)
+    const fridayDt    = new Date(`${monday}T00:00:00`)
+    fridayDt.setDate(fridayDt.getDate() + 4)
+    const weekRangeFmt = d => d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })
+    const weekLabel    = `${weekRangeFmt(new Date(`${monday}T00:00:00`))} – ${weekRangeFmt(fridayDt)}`
 
     const d30ago = new Date(); d30ago.setDate(d30ago.getDate() - 30)
     const cutoff = d30ago.toISOString().slice(0, 10)
@@ -295,7 +317,7 @@ export default function DashboardPage() {
                 </div>
 
                 {/* Metric cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                     <MetricCard
                         label="Equity actual"
                         value={equity != null ? `${fmt(equity)} USDT` : '—'}
@@ -307,6 +329,14 @@ export default function DashboardPage() {
                         value={dailyPnl != null ? `${fmtS(dailyPnl)} USDT` : '—'}
                         pct={pct(dailyPnl, baseDaily)}
                         color={pColor(dailyPnl)}
+                        loading={loading}
+                    />
+                    <MetricCard
+                        label="P&L Semana (Lun-Vie)"
+                        value={weeklyPnl != null ? `${fmtS(weeklyPnl)} USDT` : '—'}
+                        pct={pct(weeklyPnl, baseWeek)}
+                        sub={weekLabel}
+                        color={pColor(weeklyPnl)}
                         loading={loading}
                     />
                     <MetricCard

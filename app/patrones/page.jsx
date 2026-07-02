@@ -67,7 +67,7 @@ async function sendPatternEmail(coin, result, patternLabel, bias, condsMet) {
                 pricePos:     result.pricePos,
                 quality:      result.quality,
                 condsMet,
-                condsTotal:   5,
+                condsTotal:   getEntryConditions(result).length,
             }),
         });
         const json = await res.json();
@@ -115,6 +115,30 @@ function linReg(values) {
     const ssRes = values.reduce((a, v, i) => a + (v - (slope * i + intc)) ** 2, 0);
     const r2    = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
     return { slope, intercept: intc, r2, predict: x => slope * x + intc };
+}
+
+// ─── Liquidity Sweep Detection ─────────────────────────────────────────────────
+// Detects a "stop hunt": a local swing low/high whose wick gets pierced and then
+// reclaimed on close within `lookback` candles. This is the classic smart-money
+// signature of a liquidity grab that often precedes the real move — sweep the
+// lows before rallying, or sweep the highs before dumping.
+function detectLiquiditySweep(candles, lookback = 8, wickMargin = 0.0015) {
+    let sweptLow = false, sweptHigh = false;
+    for (let i = 1; i < candles.length - 1; i++) {
+        const c = candles[i];
+        const isSwingLow  = c.low  < candles[i - 1].low  && c.low  < candles[i + 1].low;
+        const isSwingHigh = c.high > candles[i - 1].high && c.high > candles[i + 1].high;
+        if (!isSwingLow && !isSwingHigh) continue;
+
+        const future = candles.slice(i + 1, i + 1 + lookback);
+        if (isSwingLow && !sweptLow) {
+            sweptLow = future.some(f => f.low < c.low * (1 - wickMargin) && f.close > c.low);
+        }
+        if (isSwingHigh && !sweptHigh) {
+            sweptHigh = future.some(f => f.high > c.high * (1 + wickMargin) && f.close < c.high);
+        }
+    }
+    return { sweptLow, sweptHigh };
 }
 
 // ─── Pattern Detection ────────────────────────────────────────────────────────
@@ -199,12 +223,15 @@ function detectPattern(candles) {
     const retestBull    = recLows.some((l, i)  => l <= hEnd * 1.025 && recCloses[i] > hEnd * 1.001);
     const retestBear    = recHighs.some((h, i) => h >= lEnd * 0.975 && recCloses[i] < lEnd * 0.999);
 
+    const { sweptLow, sweptHigh } = detectLiquiditySweep(consolSlice);
+
     const base = {
         compression, normH, normL, hR2: hReg.r2, lR2: lReg.r2,
         hEnd, lEnd, avgPrice, quality, pricePos,
         curPrice, poleMovePct: hasPole ? poleMovePct : null,
         daysToApex,
         aboveResCount, belowSupCount, retestBull, retestBear,
+        sweptLow, sweptHigh,
     };
 
     // ─── Flags & Pennants (require prior pole) ────────────────────────────────
@@ -312,6 +339,8 @@ function detectCupHandle(candles) {
     const quality     = symScore * 0.5 + depthScore * 0.5;
     const compression = 1 - (handleDepth / cupHeight);  // higher = tighter handle
 
+    const { sweptLow, sweptHigh } = detectLiquiditySweep([...cupSlice, ...handleSlice]);
+
     return {
         type: 'cup_handle',
         leftRim, rightRim, cupBottom, handleLow,
@@ -323,6 +352,7 @@ function detectCupHandle(candles) {
         poleMovePct: priorMovePct,
         aboveResCount, belowSupCount: 0, retestBull, retestBear: false,
         normH: 0, normL: 0, hR2: quality, lR2: quality, avgPrice: rimAvg,
+        sweptLow, sweptHigh,
     };
 }
 
@@ -372,6 +402,10 @@ function getEntryConditions(result) {
                 label: result.retestBull ? "Retest del nivel confirmado" : "Ruptura sostenida (≥2 cierres)",
                 ok:    result.aboveResCount >= 2 || result.retestBull,
             },
+            {
+                label: result.sweptLow ? "Barrido de liquidez bajo mínimos previos (stop hunt)" : "Sin barrido de liquidez previo",
+                ok:    !!result.sweptLow,
+            },
         ];
     }
 
@@ -415,6 +449,14 @@ function getEntryConditions(result) {
                 : isBear ? (result.belowSupCount >= 2 || result.retestBear)
                          : (result.aboveResCount >= 2 || result.retestBull ||
                             result.belowSupCount >= 2 || result.retestBear),
+        },
+        {
+            label: isBull ? "Barrido de liquidez bajo el soporte"
+                 : isBear ? "Barrido de liquidez sobre la resistencia"
+                           : "Barrido de liquidez detectado",
+            ok:   isBull ? !!result.sweptLow
+                : isBear ? !!result.sweptHigh
+                         : !!(result.sweptLow || result.sweptHigh),
         },
     ];
 }
