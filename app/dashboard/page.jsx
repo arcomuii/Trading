@@ -268,7 +268,7 @@ export default function DashboardPage() {
             }
         }
         run()
-        const iv = setInterval(run, 10 * 60 * 1000)
+        const iv = setInterval(run, 1 * 60 * 1000)
         return () => clearInterval(iv)
     }, [])
 
@@ -303,7 +303,7 @@ export default function DashboardPage() {
                     <div>
                         <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Dashboard</h1>
                         <p className="text-gray-400 dark:text-slate-500 text-sm mt-0.5">
-                            Bitunix Futures · actualiza cada 10 min
+                            Bitunix Futures · actualiza cada 1 min
                             {lastFetch && (
                                 <span> · última vez: {lastFetch.toLocaleTimeString('es-MX')}</span>
                             )}

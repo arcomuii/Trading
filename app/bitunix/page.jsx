@@ -630,6 +630,11 @@ export default function BitunixPage() {
         else { setSortKey(key); setSortDir("desc"); }
     };
 
+    // Suma del P&L no realizado de todas las posiciones abiertas (independiente del buscador/símbolo)
+    const pnlValues  = items.map(o => parseFloat(pick(o, "unrealizedPNL","unrealPnl","unrealisedPnl","unrealizedPnl","unrealPNL","pnl","profit","achievedProfits")));
+    const validPnls  = pnlValues.filter(v => !isNaN(v));
+    const totalPnl   = validPnls.reduce((sum, v) => sum + v, 0);
+
     const filtered = items
         .filter(o => {
             const q = search.toLowerCase();
@@ -699,6 +704,22 @@ export default function BitunixPage() {
                         {loading ? "Actualizando…" : "Actualizar"}
                     </button>
                 </div>
+
+                {endpoint === ENDPOINTS[0] && validPnls.length > 0 && (
+                    <div className="mb-5 bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm px-5 py-4 flex items-center justify-between flex-wrap gap-2">
+                        <div>
+                            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-widest">
+                                P&L Total (no realizado)
+                            </p>
+                            <p className={`text-2xl font-bold tabular-nums ${totalPnl >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
+                                {totalPnl >= 0 ? "+" : ""}{fmt(totalPnl, 4)}
+                            </p>
+                        </div>
+                        <p className="text-xs text-gray-400 dark:text-slate-500">
+                            Suma de {validPnls.length} de {items.length} posiciones
+                        </p>
+                    </div>
+                )}
 
                 <div className="flex flex-wrap gap-2 mb-5">
                     {ENDPOINTS.map(ep => {
