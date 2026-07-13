@@ -119,8 +119,8 @@ function PriceGauge({ entry, current, tp, sl }) {
                               stroke="#ef4444" strokeWidth="2" />
                         <text x={clamp(px(def.sl))} y={trackY - 14}
                               textAnchor="middle" fill="#ef4444" fontSize="10" fontWeight="bold">SL</text>
-                        <text x={clamp(px(def.sl))} y={trackY + trackH + 20}
-                              textAnchor="middle" fill="#ef4444" fontSize="8.5">${fmt(def.sl)}</text>
+                        <text x={clamp(px(def.sl), 70)} y={trackY + trackH + 20}
+                              textAnchor="middle" fill="#ef4444" fontSize="8.5">${fmt(def.sl, 8)}</text>
                     </>
                 )}
 
@@ -131,8 +131,8 @@ function PriceGauge({ entry, current, tp, sl }) {
                               stroke="#22c55e" strokeWidth="2" />
                         <text x={clamp(px(def.tp))} y={trackY - 14}
                               textAnchor="middle" fill="#22c55e" fontSize="10" fontWeight="bold">TP</text>
-                        <text x={clamp(px(def.tp))} y={trackY + trackH + 20}
-                              textAnchor="middle" fill="#22c55e" fontSize="8.5">${fmt(def.tp)}</text>
+                        <text x={clamp(px(def.tp), 70)} y={trackY + trackH + 20}
+                              textAnchor="middle" fill="#22c55e" fontSize="8.5">${fmt(def.tp, 8)}</text>
                     </>
                 )}
 
@@ -217,7 +217,15 @@ function TpSlModal({ position, currentPrice, onClose }) {
 
     const entryPrice = pick(position, "avgPrice","openPrice","entryPrice","avgOpenPrice","openAvgPrice","price");
 
-    // Extract TP and SL from API response
+    // Extract TP and SL from API response.
+    // El endpoint de tpsl/get_pending_orders devuelve, por posición, DOS registros
+    // separados con el mismo positionId: uno trae tpPrice (y slPrice: null) y el otro
+    // trae slPrice (y tpPrice: null) — no vienen combinados en un solo registro, y no
+    // tienen type/orderType/tpslType para distinguirlos. El código anterior solo miraba
+    // orders[0] del arreglo COMPLETO (sin filtrar por posición): si en ese índice caía
+    // el registro de otra posición, o el registro de SL en vez del de TP, se perdía uno
+    // de los dos valores — de ahí que "a veces" no cargara bien. Ahora se filtran todos
+    // los registros de ESTA posición y se combinan sus campos no nulos.
     let tp = null, sl = null, orders = [];
     if (tpslData?.data) {
         const d = tpslData.data;
@@ -227,20 +235,29 @@ function TpSlModal({ position, currentPrice, onClose }) {
                  Array.isArray(d)           ? d           :
                  d                          ? [d]         : [];
 
-        for (const ord of orders) {
-            const type = (ord.type || ord.orderType || ord.tpslType || ord.side || "").toUpperCase();
-            const trig = pick(ord, "triggerPrice","tpPrice","takeProfitPrice","price","tp");
-            const trig2 = pick(ord, "triggerPrice","slPrice","stopLossPrice","price","sl");
+        const matches = orders.filter(o =>
+            (position.positionId && String(o.positionId) === String(position.positionId)) ||
+            (!position.positionId && o.symbol === position.symbol)
+        );
+        const pool = matches.length > 0 ? matches : orders;
 
-            if (type.includes("TAKE") || type === "TP" || type.includes("PROFIT")) {
-                if (!tp) tp = trig;
-            } else if (type.includes("STOP") || type === "SL" || type.includes("LOSS")) {
-                if (!sl) sl = trig2;
+        for (const o of pool) {
+            if (tp == null) tp = pick(o, "tpPrice", "takeProfitPrice", "tp");
+            if (sl == null) sl = pick(o, "slPrice", "stopLossPrice", "sl");
+        }
+
+        // Compatibilidad con formatos donde TP y SL vienen marcados por type/orderType/side
+        // en vez de por los campos tpPrice/slPrice directos.
+        if (tp == null || sl == null) {
+            for (const ord of pool) {
+                const type = (ord.type || ord.orderType || ord.tpslType || ord.side || "").toUpperCase();
+                if (tp == null && (type.includes("TAKE") || type === "TP" || type.includes("PROFIT"))) {
+                    tp = pick(ord, "triggerPrice", "tpPrice", "takeProfitPrice", "price", "tp");
+                } else if (sl == null && (type.includes("STOP") || type === "SL" || type.includes("LOSS"))) {
+                    sl = pick(ord, "triggerPrice", "slPrice", "stopLossPrice", "price", "sl");
+                }
             }
         }
-        // Fallback: try direct fields on first order
-        if (!tp && orders[0]) tp = pick(orders[0], "tpPrice","takeProfitPrice","tp");
-        if (!sl && orders[0]) sl = pick(orders[0], "slPrice","stopLossPrice","sl");
     }
 
     const hasData = tp || sl;
@@ -314,13 +331,13 @@ function TpSlModal({ position, currentPrice, onClose }) {
                                 {[
                                     { label: "Entrada",     value: entryPrice,   color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-950" },
                                     { label: "Actual",      value: currentPrice, color: "text-gray-800 dark:text-slate-100",    bg: "bg-gray-50 dark:bg-slate-800"    },
-                                    { label: "Take Profit", value: tp,           color: "text-green-600 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-950"   },
-                                    { label: "Stop Loss",   value: sl,           color: "text-red-500 dark:text-red-400",       bg: "bg-red-50 dark:bg-red-950"       },
-                                ].map(({ label, value, color, bg }) => (
+                                    { label: "Take Profit", value: tp,           color: "text-green-600 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-950",   dec: 8 },
+                                    { label: "Stop Loss",   value: sl,           color: "text-red-500 dark:text-red-400",       bg: "bg-red-50 dark:bg-red-950",       dec: 8 },
+                                ].map(({ label, value, color, bg, dec }) => (
                                     <div key={label} className={`${bg} rounded-xl p-3 text-center`}>
                                         <p className="text-gray-400 dark:text-slate-500 text-[10px] uppercase tracking-wide font-semibold mb-1">{label}</p>
                                         <p className={`font-bold text-sm ${color} tabular-nums`}>
-                                            {value ? `$${fmt(value)}` : "—"}
+                                            {value ? `$${fmt(value, dec ?? 2)}` : "—"}
                                         </p>
                                     </div>
                                 ))}

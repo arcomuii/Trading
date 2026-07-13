@@ -11,7 +11,7 @@ const RETRY_DELAYS = [15_000, 30_000, 60_000];
 // México (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6.
 // Horarios de escaneo automático en hora de México: 06:00, 10:00, 14:00, 18:00, 22:00, 02:00.
 // Convertidos a UTC (+6h): 12, 16, 20, 0, 4, 8.
-const MEXICO_SCAN_UTC_HOURS = [12, 16, 20, 0, 4, 8];
+const MEXICO_SCAN_UTC_HOURS = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];
 
 // Contratos disponibles en Bitunix Futures (snapshot estático en vez de fetch en vivo)
 const BITUNIX_TICKERS = [
@@ -808,13 +808,13 @@ function PatternIcon({ type }) {
     );
 }
 
-// ─── Fetch 4H OHLC with retry ─────────────────────────────────────────────────
+// ─── Fetch 1H OHLC with retry ─────────────────────────────────────────────────
 // Binance público: sin API key, límite ~6000 weight/min (klines de 200 velas = 2 de
 // weight) — muchísimo más margen que CoinGecko anónimo. `symbol` es el par de Binance,
 // ej. "BTCUSDT" (ya viene del ticker real de CoinGecko, sin el prefijo "1000x" de Bitunix).
 async function fetchPatterns(symbol, attempt = 0) {
     const res = await fetch(
-        `/api/binance/api/v3/klines?symbol=${symbol}&interval=4h&limit=200`
+        `/api/binance/api/v3/klines?symbol=${symbol}&interval=1h&limit=200`
     );
     if (res.status === 429 || res.status === 418) {
         // 418 = IP bloqueada temporalmente por exceso de weight (poco probable a este ritmo)
@@ -844,6 +844,263 @@ async function cancellableWait(ms, abortRef) {
         if (abortRef.current) return;
         await new Promise(r => setTimeout(r, Math.min(100, end - Date.now())));
     }
+}
+
+// ─── OpenPositionModal ─────────────────────────────────────────────────────────
+// Opens a real LIMIT order on Bitunix Futures sized at BALANCE_PCT of available balance,
+// using the entry/SL/TP1 levels shown on the card. TP/SL are attached to the same
+// order as market-triggered exits (tpOrderType/slOrderType = MARKET) so no separate
+// tpsl order call is needed.
+const INITIAL_LEVERAGE = 2;    // Apalancamiento inicial para todas las posiciones abiertas desde esta pantalla
+const MAX_LEVERAGE     = 5;    // Tope al que se escala si Bitunix rechaza la orden
+const BALANCE_PCT      = 0.10; // Porcentaje del saldo disponible usado como capital de la posición
+
+function OpenPositionModal({ coin, result, levels, onClose }) {
+    const [balance,  setBalance]  = useState(null);
+    const [balErr,   setBalErr]   = useState(null);
+    const [status,   setStatus]   = useState("loading"); // loading | idle | sending | success | error
+    const [apiResp,  setApiResp]  = useState(null);
+    const [leverage, setLeverage] = useState(INITIAL_LEVERAGE);
+
+    const sym        = coin.symbol.toUpperCase();
+    const symbolPair = `${sym}USDT`;
+    const meta        = PATTERN_META[result.type] ?? {};
+    const isBull      = meta.bias === "bullish";
+    const dec         = levels.entry < 1 ? 6 : levels.entry < 10 ? 4 : 2;
+
+    useEffect(() => {
+        const h = e => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    const fetchBalance = () => {
+        setStatus("loading");
+        setBalErr(null);
+        fetch('/api/bitunix/api/v1/futures/account?marginCoin=USDT')
+            .then(r => r.json())
+            .then(json => {
+                if (json.code !== undefined && json.code !== 0 && json.code !== '0')
+                    throw new Error(`[${json.code}] ${json.msg || 'Error de API'}`);
+                const acct = [json.data, json.result, json]
+                    .map(x => Array.isArray(x) ? x[0] : x)
+                    .find(x => x?.available != null);
+                if (!acct) throw new Error('No se pudo leer el saldo disponible (campo "available" no encontrado)');
+                setBalance(parseFloat(acct.available));
+                setStatus("idle");
+            })
+            .catch(err => { setBalErr(err.message); setStatus("error"); });
+    };
+
+    useEffect(() => { fetchBalance(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const capital = balance != null ? balance * BALANCE_PCT : null;
+    const qty     = capital != null && levels.entry > 0 ? capital / levels.entry : null;
+    const qtyStr  = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
+
+    // Un intento completo: ajustar apalancamiento y luego colocar la orden.
+    const attemptOrder = async (lev) => {
+        setLeverage(lev);
+
+        const levRes = await fetch("/api/bitunix/api/v1/futures/account/change_leverage", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: symbolPair, leverage: lev, marginCoin: "USDT" }),
+        });
+        const levData = await levRes.json();
+        const levOk = levData?.code === 0 || levData?.code === "0";
+        if (!levOk) return { ok: false, data: { step: "change_leverage", leverage: lev, ...levData } };
+
+        const body = JSON.stringify({
+            symbol:      symbolPair,
+            side:        isBull ? "BUY" : "SELL",
+            tradeSide:   "OPEN",
+            orderType:   "LIMIT",
+            price:       String(levels.entry),
+            qty:         qtyStr,
+            effect:      "GTC",
+            tpPrice:     String(levels.tp1),
+            tpStopType:  "LAST_PRICE",
+            tpOrderType: "MARKET",
+            slPrice:     String(levels.sl),
+            slStopType:  "LAST_PRICE",
+            slOrderType: "MARKET",
+        });
+        const res  = await fetch("/api/bitunix/api/v1/futures/trade/place_order", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+        });
+        const data = await res.json();
+        const ok = data?.code === 0 || data?.code === "0" || data?.data?.orderId;
+        return { ok, data: { step: "place_order", leverage: lev, ...data } };
+    };
+
+    // Si un intento falla, reintenta subiendo el apalancamiento (2x → 3x → 4x → 5x máx.)
+    // antes de rendirse — un rechazo por margen insuficiente puede resolverse con más
+    // apalancamiento (mismo capital, menor margen requerido); otros rechazos (p.ej.
+    // precisión de cantidad) fallarán igual en cada intento y se reportan tal cual.
+    const handleConfirm = async () => {
+        if (!qtyStr) return;
+        setStatus("sending");
+        try {
+            let lev = INITIAL_LEVERAGE;
+            let result = await attemptOrder(lev);
+            while (!result.ok && lev < MAX_LEVERAGE) {
+                lev += 1;
+                result = await attemptOrder(lev);
+            }
+            setApiResp(result.data);
+            setStatus(result.ok ? "success" : "error");
+        } catch (err) {
+            setApiResp({ error: err.message });
+            setStatus("error");
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                <div className={`px-6 py-4 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between ${
+                    status === "success" ? "bg-green-50 dark:bg-green-950" : status === "error" ? "bg-red-50 dark:bg-red-950" : ""
+                }`}>
+                    <div>
+                        <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">Abrir posición</h2>
+                        <p className="text-gray-400 dark:text-slate-500 text-xs mt-0.5">
+                            {symbolPair} · <span className={`font-bold ${isBull ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
+                                {isBull ? "LONG" : "SHORT"}
+                            </span>
+                        </p>
+                    </div>
+                    <button onClick={onClose}
+                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div className="px-6 py-5">
+                    {status === "loading" && (
+                        <div className="flex items-center justify-center py-10 text-gray-400 dark:text-slate-500 gap-3">
+                            <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            Consultando saldo disponible…
+                        </div>
+                    )}
+
+                    {(status === "idle" || status === "sending") && balance != null && (
+                        <>
+                            <div className="rounded-xl p-4 text-center mb-3 bg-indigo-500 dark:bg-indigo-600">
+                                <p className="text-[10px] font-semibold text-white/75 uppercase tracking-widest mb-1">Capital total a usar en esta operación</p>
+                                <p className="text-2xl font-black text-white">${fmt(capital, 2)}</p>
+                                <p className="text-[10px] text-white/70 mt-0.5">{BALANCE_PCT * 100}% del saldo disponible</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                <div className="bg-gray-50 dark:bg-slate-800 rounded-xl p-3 text-center">
+                                    <p className="text-gray-400 dark:text-slate-500 text-[10px] uppercase tracking-wide font-semibold mb-1">Saldo disponible</p>
+                                    <p className="font-bold text-sm text-gray-800 dark:text-slate-100">${fmt(balance, 2)}</p>
+                                </div>
+                                <div className="bg-amber-50 dark:bg-amber-950 rounded-xl p-3 text-center">
+                                    <p className="text-amber-500 dark:text-amber-400 text-[10px] uppercase tracking-wide font-semibold mb-1">Apalancamiento</p>
+                                    <p className="font-bold text-sm text-amber-700 dark:text-amber-300">{leverage}×</p>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                <div className="bg-indigo-50 dark:bg-indigo-950/40 rounded-lg p-2 text-center border border-indigo-200 dark:border-indigo-800">
+                                    <p className="text-[9px] font-semibold text-indigo-500 uppercase tracking-wide">Entrada</p>
+                                    <p className="text-xs font-bold text-indigo-700 dark:text-indigo-300 font-mono">${fmt(levels.entry, dec)}</p>
+                                </div>
+                                <div className="bg-red-50 dark:bg-red-950/40 rounded-lg p-2 text-center border border-red-200 dark:border-red-800">
+                                    <p className="text-[9px] font-semibold text-red-500 uppercase tracking-wide">SL</p>
+                                    <p className="text-xs font-bold text-red-700 dark:text-red-300 font-mono">${fmt(levels.sl, dec)}</p>
+                                </div>
+                                <div className="bg-green-50 dark:bg-green-950/40 rounded-lg p-2 text-center border border-green-200 dark:border-green-800">
+                                    <p className="text-[9px] font-semibold text-green-600 uppercase tracking-wide">TP1</p>
+                                    <p className="text-xs font-bold text-green-700 dark:text-green-300 font-mono">${fmt(levels.tp1, dec)}</p>
+                                </div>
+                            </div>
+                            <p className="text-sm text-gray-500 dark:text-slate-400 mb-2">
+                                Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{INITIAL_LEVERAGE}×</span> y se enviará una orden{" "}
+                                <span className="font-bold text-gray-800 dark:text-slate-100">LIMIT {isBull ? "BUY" : "SELL"}</span> por{" "}
+                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(capital, 2)}) a ${fmt(levels.entry, dec)}, con TP/SL adjuntos a mercado.
+                            </p>
+                            <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-5 italic">
+                                La cantidad es una estimación ({BALANCE_PCT * 100}% del saldo ÷ precio de entrada). Si Bitunix rechaza la orden, se reintenta subiendo el
+                                apalancamiento ({INITIAL_LEVERAGE}× → {MAX_LEVERAGE}× máx.) antes de reportar el error.
+                            </p>
+                            <button onClick={handleConfirm} disabled={status === "sending" || !qtyStr}
+                                className={`w-full font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 text-white disabled:opacity-60 ${
+                                    isBull ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
+                                }`}>
+                                {status === "sending" ? `Enviando orden… (${leverage}×)` : `Confirmar ${isBull ? "LONG" : "SHORT"}`}
+                            </button>
+                        </>
+                    )}
+
+                    {status === "success" && (
+                        <div className="text-center py-6">
+                            <div className="w-14 h-14 bg-green-100 dark:bg-green-950 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round">
+                                    <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                            </div>
+                            <p className="font-bold text-gray-800 dark:text-slate-100 text-lg">Orden enviada</p>
+                            <p className="text-gray-400 dark:text-slate-500 text-sm mt-1 mb-4">
+                                {qtyStr} {sym} @ ${fmt(levels.entry, dec)} · TP1 ${fmt(levels.tp1, dec)} · SL ${fmt(levels.sl, dec)} · {leverage}×
+                            </p>
+                            {leverage > INITIAL_LEVERAGE && (
+                                <p className="text-[10px] text-amber-500 dark:text-amber-400 -mt-3 mb-4">
+                                    Se subió el apalancamiento a {leverage}× tras un rechazo inicial en {INITIAL_LEVERAGE}×.
+                                </p>
+                            )}
+                            <button onClick={onClose}
+                                className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-semibold px-6 py-2 rounded-xl transition-colors">
+                                Cerrar
+                            </button>
+                        </div>
+                    )}
+
+                    {status === "error" && (
+                        <div className="text-center py-4">
+                            <div className="w-14 h-14 bg-red-100 dark:bg-red-950 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
+                                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                            </div>
+                            <p className="font-bold text-red-600 dark:text-red-400 mb-2">
+                                {balErr ? "Error al consultar saldo"
+                                    : apiResp?.step === "change_leverage" ? "Error al ajustar el apalancamiento"
+                                    : "Error al enviar la orden"}
+                            </p>
+                            {!balErr && apiResp && (
+                                <p className="text-xs text-gray-400 dark:text-slate-500 mb-2">
+                                    Se reintentó subiendo el apalancamiento hasta {leverage}× {leverage >= MAX_LEVERAGE ? "(máximo) " : ""}sin éxito.
+                                </p>
+                            )}
+                            {(balErr || apiResp) && (
+                                <pre className="text-xs bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 rounded-xl p-3 text-left overflow-auto max-h-36 mb-4">
+                                    {balErr || JSON.stringify(apiResp, null, 2)}
+                                </pre>
+                            )}
+                            <div className="flex gap-2 justify-center">
+                                <button onClick={() => balance == null ? fetchBalance() : setStatus("idle")}
+                                    className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-semibold px-5 py-2 rounded-xl transition-colors">
+                                    Reintentar
+                                </button>
+                                <button onClick={onClose}
+                                    className="bg-red-50 dark:bg-red-950 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-400 font-semibold px-5 py-2 rounded-xl transition-colors">
+                                    Cancelar
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 }
 
 // ─── PatternCard ──────────────────────────────────────────────────────────────
@@ -876,6 +1133,8 @@ function PatternCard({ coin, result, updatedAt }) {
 
     const conds  = getEntryConditions(result);
     const allMet = conds.every(c => c.ok);
+    const lv     = calcLevels(result);
+    const [showOpenModal, setShowOpenModal] = useState(false);
 
     const borderCls = allMet
         ? "border-amber-400 dark:border-amber-500 ring-2 ring-amber-200 dark:ring-amber-900"
@@ -1029,7 +1288,6 @@ function PatternCard({ coin, result, updatedAt }) {
 
             {/* Entry / TP / SL — always shown; highlighted when all conditions met */}
             {(() => {
-                const lv  = calcLevels(result);
                 if (!lv) return null;
                 const dec   = result.hEnd < 1 ? 5 : result.hEnd < 10 ? 4 : 2;
                 const rrCls = lv.rr >= 2   ? "text-green-600 dark:text-green-400"
@@ -1099,6 +1357,19 @@ function PatternCard({ coin, result, updatedAt }) {
                 );
             })()}
 
+            {/* Abrir posición — LIMIT order sized at BALANCE_PCT of available balance */}
+            {lv && (
+                <button
+                    type="button"
+                    onClick={() => setShowOpenModal(true)}
+                    className={`w-full mb-3 text-xs font-bold py-2 rounded-xl transition-colors text-white ${
+                        isBull ? "bg-green-500 hover:bg-green-600" : isBear ? "bg-red-500 hover:bg-red-600" : "bg-indigo-500 hover:bg-indigo-600"
+                    }`}
+                >
+                    Abrir posición
+                </button>
+            )}
+
             {/* Links */}
             <div className="flex gap-2 pt-3 border-t border-gray-100 dark:border-slate-700">
                 <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
@@ -1112,6 +1383,10 @@ function PatternCard({ coin, result, updatedAt }) {
                     Ver en TradingView
                 </a>
             </div>
+
+            {showOpenModal && lv && (
+                <OpenPositionModal coin={coin} result={result} levels={lv} onClose={() => setShowOpenModal(false)} />
+            )}
         </div>
     );
 }
@@ -1124,6 +1399,8 @@ function BreakoutCard({ coin, result, updatedAt }) {
     const sym     = coin.symbol.toUpperCase();
     const urgency = result.daysToApex !== null && result.daysToApex <= 5 ? "high"
                   : result.daysToApex !== null && result.daysToApex <= 10 ? "med" : "low";
+    const lv      = calcLevels(result);
+    const [showOpenModal, setShowOpenModal] = useState(false);
 
     return (
         <div className={`relative rounded-2xl border-2 p-4 overflow-hidden ${
@@ -1215,7 +1492,6 @@ function BreakoutCard({ coin, result, updatedAt }) {
 
             {/* Entry / TP / SL for BreakoutCard */}
             {(() => {
-                const lv    = calcLevels(result);
                 const conds = getEntryConditions(result);
                 const allMet = conds.every(c => c.ok);
                 if (!lv) return null;
@@ -1265,6 +1541,19 @@ function BreakoutCard({ coin, result, updatedAt }) {
                 );
             })()}
 
+            {/* Abrir posición — LIMIT order sized at BALANCE_PCT of available balance */}
+            {lv && (
+                <button
+                    type="button"
+                    onClick={() => setShowOpenModal(true)}
+                    className={`w-full mt-2 text-[10px] font-bold py-1.5 rounded-lg transition-colors text-white ${
+                        isBull ? "bg-green-500 hover:bg-green-600" : isBear ? "bg-red-500 hover:bg-red-600" : "bg-indigo-500 hover:bg-indigo-600"
+                    }`}
+                >
+                    Abrir posición
+                </button>
+            )}
+
             {/* Links */}
             <div className="flex gap-2 mt-2">
                 <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
@@ -1278,6 +1567,10 @@ function BreakoutCard({ coin, result, updatedAt }) {
                     TradingView
                 </a>
             </div>
+
+            {showOpenModal && lv && (
+                <OpenPositionModal coin={coin} result={result} levels={lv} onClose={() => setShowOpenModal(false)} />
+            )}
         </div>
     );
 }
@@ -1537,9 +1830,9 @@ export default function PatronesPage() {
 
                 {/* ─── Header ───────────────────────────────────────────────── */}
                 <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión</h1>
+                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión (1H)</h1>
                     <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
-                        Detección automática en gráfico 4H · Taza y Asa · Triángulos · Cuñas · Banderas · Banderines
+                        Detección automática en gráfico 1H · Taza y Asa · Triángulos · Cuñas · Banderas · Banderines
                     </p>
                     <div className="flex items-center gap-3 mt-3 flex-wrap">
                         {bitunixSymbols === null ? (
@@ -1610,7 +1903,7 @@ export default function PatronesPage() {
                                         <svg className="animate-spin w-4 h-4 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                                             <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                                         </svg>
-                                        <span className="text-sm font-semibold text-gray-700 dark:text-slate-200">Escaneando gráficos 4H…</span>
+                                        <span className="text-sm font-semibold text-gray-700 dark:text-slate-200">Escaneando gráficos 1H…</span>
                                         {currentCoin && (
                                             <span className="text-xs text-gray-400 dark:text-slate-500 font-mono">{currentCoin.symbol.toUpperCase()}</span>
                                         )}
@@ -1829,7 +2122,7 @@ export default function PatronesPage() {
                 {!initialLoad && scanRunning && allPatterns.length === 0 && (
                     <div className="text-center py-20 text-gray-400 dark:text-slate-500">
                         <div className="text-5xl mb-4">📐</div>
-                        <p className="font-semibold text-gray-500 dark:text-slate-400 text-lg">Buscando patrones en 4H…</p>
+                        <p className="font-semibold text-gray-500 dark:text-slate-400 text-lg">Buscando patrones en 1H…</p>
                         <p className="text-sm mt-2">Analizando {progress.done} de {progress.total} activos</p>
                     </div>
                 )}
