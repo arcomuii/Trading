@@ -543,7 +543,7 @@ const COLUMNS = [
     { key: "markPrice",        label: "Precio actual"  },
     { key: "unrealizedPNL",    label: "P&L no real."   },
     { key: "leverage",         label: "Apalancamiento" },
-    { key: "liquidationPrice", label: "Liq. Price"     },
+    { key: "candles4h",       label: "Velas 4H"       },
     { key: "margin",           label: "Margen"         },
     { key: "createTime",       label: "Apertura"       },
 ];
@@ -552,6 +552,11 @@ const ENDPOINTS = [
     "/api/bitunix/api/v1/futures/position/get_pending_positions",
     "/api/bitunix/api/v1/futures/trade/get_pending_orders",
 ];
+
+// Umbral de velas de 4H para remarcar visualmente una posición que lleva mucho
+// tiempo abierta (ver columna "Velas 4H") — el cierre ya no es automático, sólo
+// una señal visual para que se decida manualmente.
+const STALE_CANDLES_THRESHOLD = 15;
 
 function extractList(json) {
     if (!json?.data) return [];
@@ -613,7 +618,8 @@ export default function BitunixPage() {
                 throw new Error(`${json.msg || "Error de API"} (código ${json.code})`);
             }
 
-            setItems(extractList(json));
+            const list = extractList(json);
+            setItems(list);
             setLastUpdate(new Date());
 
             if (tickRes.ok) {
@@ -666,6 +672,14 @@ export default function BitunixPage() {
                 const va = (a[sortKey] || "").toLowerCase();
                 const vb = (b[sortKey] || "").toLowerCase();
                 return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+            }
+            // "Velas 4H" es un valor calculado (no un campo crudo de la posición) — se
+            // ordena por el mismo openTime del que se deriva (más velas transcurridas
+            // == apertura más antigua).
+            if (sortKey === "candles4h") {
+                const ta = Number(pick(a, "createTime","openTime","ctime","createdAt","createTimestamp","time")) || 0;
+                const tb = Number(pick(b, "createTime","openTime","ctime","createdAt","createTimestamp","time")) || 0;
+                return sortDir === "asc" ? ta - tb : tb - ta;
             }
             const va = parseFloat(a[sortKey] ?? 0);
             const vb = parseFloat(b[sortKey] ?? 0);
@@ -833,12 +847,14 @@ export default function BitunixPage() {
 
                                                 const entryPrice = pick(o, "avgPrice","openPrice","entryPrice","avgOpenPrice","openAvgPrice","price");
                                                 const markPrice  = prices[o.symbol] ?? pick(o, "markPrice","lastPrice","indexPrice","currentPrice","marketPrice","closePrice");
-                                                const liqPrice   = pick(o, "liquidationPrice","liqPrice","forceLiqPrice","bankruptPrice","estLiqPrice","forcePrice");
                                                 const qty        = pick(o, "qty","size","quantity","positionAmt","available","vol");
                                                 const pnl        = pick(o, "unrealizedPNL","unrealPnl","unrealisedPnl","unrealizedPnl","unrealPNL","pnl","profit","achievedProfits");
                                                 const lev        = pick(o, "leverage","lever","lev");
                                                 const margin     = pick(o, "margin","initialMargin","positionMargin","im","posMargin","frozenMargin");
                                                 const openTime   = pick(o, "createTime","openTime","ctime","createdAt","createTimestamp","time");
+                                                const candles4h  = openTime != null
+                                                    ? Math.floor((Date.now() - Number(openTime)) / (4 * 3600 * 1000))
+                                                    : null;
 
                                                 return (
                                                     <Fragment key={rowId}>
@@ -863,8 +879,19 @@ export default function BitunixPage() {
                                                             <td className="px-4 py-3 text-gray-500 dark:text-slate-400 whitespace-nowrap text-center">
                                                                 {lev ? `${lev}×` : "—"}
                                                             </td>
-                                                            <td className="px-4 py-3 font-mono text-orange-400 whitespace-nowrap text-xs">
-                                                                {liqPrice ? `$${fmt(liqPrice)}` : "—"}
+                                                            <td className="px-4 py-3 whitespace-nowrap text-center">
+                                                                {candles4h != null && candles4h >= 0 ? (
+                                                                    <span
+                                                                        title={candles4h >= STALE_CANDLES_THRESHOLD
+                                                                            ? `${candles4h} velas 4H — supera el umbral de ${STALE_CANDLES_THRESHOLD}, considera cerrar manualmente`
+                                                                            : `${candles4h} velas 4H`}
+                                                                        className={candles4h >= STALE_CANDLES_THRESHOLD
+                                                                            ? "inline-flex items-center gap-1 font-mono text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 animate-pulse"
+                                                                            : "font-mono text-orange-400 text-xs"}
+                                                                    >
+                                                                        {candles4h >= STALE_CANDLES_THRESHOLD && "⚠ "}{candles4h}
+                                                                    </span>
+                                                                ) : "—"}
                                                             </td>
                                                             <td className="px-4 py-3 text-gray-500 dark:text-slate-400 tabular-nums whitespace-nowrap">
                                                                 {margin ? `$${fmt(margin)}` : "—"}

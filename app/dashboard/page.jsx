@@ -29,6 +29,55 @@ function mondayOf(date) {
     return d.toISOString().slice(0, 10)
 }
 
+// ── market hours (CDMX) ────────────────────────────────────────
+// Convierte una hora local de una zona IANA a un Date real usando los datos de
+// zona horaria del motor JS (soporta DST correctamente: EDT/EST en Nueva York;
+// Shanghái no tiene horario de verano). Técnica estándar: "adivina" el UTC
+// tratando la hora local como si ya fuera UTC, mide el offset real de la zona
+// en ese instante aproximado, y corrige con ese offset.
+function getZoneOffsetMinutes(date, timeZone) {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+        timeZone, hourCycle: 'h23',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+    })
+    const parts = dtf.formatToParts(date).reduce((acc, p) => (acc[p.type] = p.value, acc), {})
+    const asUTC = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+    return (asUTC - date.getTime()) / 60000
+}
+function zonedTimeToUtcDate(y, mo, d, h, mi, timeZone) {
+    const guess  = Date.UTC(y, mo - 1, d, h, mi)
+    const offset = getZoneOffsetMinutes(new Date(guess), timeZone)
+    return new Date(guess - offset * 60000)
+}
+function fmtCDMXTime(date) {
+    return date.toLocaleTimeString('es-MX', { timeZone: 'America/Mexico_City', hour: '2-digit', minute: '2-digit' })
+}
+// Sábado/domingo en la zona del propio mercado (no en CDMX) — evita marcar un
+// mercado como "abierto" solo porque la hora cae dentro de la ventana calculada
+// para hoy cuando en realidad hoy es fin de semana en esa bolsa.
+function isWeekdayInZone(date, timeZone) {
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(date)
+    return wd !== 'Sat' && wd !== 'Sun'
+}
+
+// Horarios de NYSE (9:30 a.m.–4:00 p.m. hora del Este) y de las bolsas de
+// Shanghái/Shenzhen (9:30–11:30 y 13:00–15:00 hora de China), traducidos a
+// hora de CDMX. Se recalculan sobre la fecha de hoy para que NYSE se ajuste
+// automáticamente entre EDT (verano) y EST (invierno).
+function getMarketHours() {
+    const now = new Date()
+    const y = now.getUTCFullYear(), mo = now.getUTCMonth() + 1, d = now.getUTCDate()
+    return {
+        nyseOpen:     zonedTimeToUtcDate(y, mo, d, 9, 30, 'America/New_York'),
+        nyseClose:    zonedTimeToUtcDate(y, mo, d, 16, 0, 'America/New_York'),
+        chinaAmOpen:  zonedTimeToUtcDate(y, mo, d, 9, 30, 'Asia/Shanghai'),
+        chinaAmClose: zonedTimeToUtcDate(y, mo, d, 11, 30, 'Asia/Shanghai'),
+        chinaPmOpen:  zonedTimeToUtcDate(y, mo, d, 13, 0, 'Asia/Shanghai'),
+        chinaPmClose: zonedTimeToUtcDate(y, mo, d, 15, 0, 'Asia/Shanghai'),
+    }
+}
+
 // ── formatters ────────────────────────────────────────────────
 const fmt  = (v, d = 2) => {
     const n = parseFloat(v)
@@ -253,6 +302,7 @@ export default function DashboardPage() {
                 const total = [
                     acct?.available,
                     acct?.margin,
+                    acct?.frozen, // margen reservado en órdenes pendientes (aún no ejecutadas)
                     acct?.crossUnrealizedPNL,
                     acct?.isolationUnrealizedPNL,
                 ].reduce((s, v) => s + parseFloat(v ?? 0), 0)
@@ -293,6 +343,13 @@ export default function DashboardPage() {
     const hist30 = history.filter(e => e.date >= cutoff)
     const pnlSer = buildPnlSeries(hist30)
     const monthly = buildMonthlyMap(history)
+    const mh = getMarketHours()
+    const nowTick    = new Date()
+    const nyseIsOpen = isWeekdayInZone(nowTick, 'America/New_York') && nowTick >= mh.nyseOpen && nowTick < mh.nyseClose
+    const chinaIsOpen = isWeekdayInZone(nowTick, 'Asia/Shanghai') && (
+        (nowTick >= mh.chinaAmOpen && nowTick < mh.chinaAmClose) ||
+        (nowTick >= mh.chinaPmOpen && nowTick < mh.chinaPmClose)
+    )
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-8 px-6">
@@ -354,6 +411,42 @@ export default function DashboardPage() {
                         color={pColor(pnl30)}
                         loading={loading}
                     />
+                </div>
+                
+                {/* Market hours (CDMX) */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
+                    <p className="text-sm font-semibold text-gray-700 dark:text-slate-200 mb-1">Horarios de mercado</p>
+                    <p className="text-xs text-gray-400 dark:text-slate-500 mb-4">Convertidos a hora de Ciudad de México (CDMX)</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className={`rounded-xl p-4 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 transition-shadow ${
+                            nyseIsOpen ? 'shadow-[0px_0px_10px_5px_rgba(250,204,21,0.65)]' : ''
+                        }`}>
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-500 dark:text-indigo-400 mb-1.5">
+                                Nueva York (NYSE)
+                            </p>
+                            <p className="text-lg font-black font-mono text-gray-800 dark:text-slate-100">
+                                {fmtCDMXTime(mh.nyseOpen)} – {fmtCDMXTime(mh.nyseClose)}
+                            </p>
+                            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">
+                                9:30 a.m. – 4:00 p.m. hora del Este · se ajusta solo entre EDT/EST
+                            </p>
+                        </div>
+                        <div className={`rounded-xl p-4 bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900 transition-shadow ${
+                            chinaIsOpen ? 'shadow-[0_0_0_3px_rgba(250,204,21,0.65)]' : ''
+                        }`}>
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-red-500 dark:text-red-400 mb-1.5">
+                                China (Shanghái / Shenzhen)
+                            </p>
+                            <p className="text-lg font-black font-mono text-gray-800 dark:text-slate-100">
+                                {fmtCDMXTime(mh.chinaAmOpen)} – {fmtCDMXTime(mh.chinaAmClose)}
+                                <span className="text-gray-300 dark:text-slate-600 mx-1.5">·</span>
+                                {fmtCDMXTime(mh.chinaPmOpen)} – {fmtCDMXTime(mh.chinaPmClose)}
+                            </p>
+                            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">
+                                9:30–11:30 y 13:00–15:00 hora de China · por la diferencia horaria, cae en la noche anterior en CDMX
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
                 {/* Area chart — equity history */}

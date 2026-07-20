@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
+import { isApexTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT } from "../lib/autoTrade";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -121,51 +122,6 @@ function sendPatternNotification(coin, result, patternLabel, bias) {
         n.onerror = (e) => console.error('[PatternNotif] Error:', e);
     } catch (e) {
         console.error('[PatternNotif] Excepción:', e);
-    }
-}
-
-async function sendPatternEmail(coin, result, patternLabel, bias, condsMet) {
-    try {
-        const conds  = getEntryConditions(result);
-        const levels = calcLevels(result);
-        const res = await fetch('/api/pattern-email', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                coinName:     coin.name,
-                symbol:       coin.symbol.toUpperCase(),
-                price:        result.curPrice,
-                image:        coin.image,
-                bitunixUrl:   `https://www.bitunix.com/es-es/contract-trade/${coin.symbol.toUpperCase()}USDT`,
-                patternLabel,
-                direction:    bias === 'bullish' ? 'LONG' : bias === 'bearish' ? 'SHORT' : 'NEUTRAL',
-                bias,
-                compression:  result.compression,
-                daysToApex:   result.daysToApex,
-                pricePos:     result.pricePos,
-                quality:      result.quality,
-                condsMet,
-                condsTotal:   conds.length,
-                conditions:   conds,
-                entry:        levels?.entry ?? null,
-                stopLoss:     levels?.sl ?? null,
-                takeProfit1:  levels?.tp1 ?? null,
-                takeProfit2:  levels?.tp2 ?? null,
-                takeProfit3:  levels?.tp3 ?? null,
-                riskReward1:  levels?.rr1 ?? null,
-                riskReward2:  levels?.rr2 ?? null,
-                riskReward3:  levels?.rr3 ?? null,
-                extended:        levels?.extended ?? false,
-                realRiskReward:  levels?.realRR ?? null,
-                breakevenWinRate: levels?.breakevenWinRate ?? null,
-                extendedScore:   levels?.extendedScore ?? null,
-            }),
-        });
-        const json = await res.json();
-        if (!res.ok) console.error('[PatternEmail] Error:', json);
-        else         console.log('[PatternEmail] Enviado:', coin.symbol, result.type);
-    } catch (e) {
-        console.error('[PatternEmail] Excepción:', e);
     }
 }
 
@@ -1304,7 +1260,31 @@ export default function PatronesPage() {
     const [activeFilter,   setActiveFilter]   = useState("all");
     const [showCoverage,   setShowCoverage]   = useState(false);
     const notifiedRef = useRef(new Set());
+    const autoTradedRef = useRef(new Set());
     const [notifPerm, setNotifPerm] = useState('default');
+
+    // Monto por operación (USDT) para la apertura automática — persistido en
+    // localStorage vía app/lib/autoTrade.js, se mantiene hasta que se cambie manualmente.
+    // Se inicializa con el valor por defecto (igual en servidor y cliente, evita
+    // desajustes de hidratación) y se sobreescribe con el valor guardado tras montar.
+    const [tradeAmount,      setTradeAmountState] = useState(DEFAULT_TRADE_AMOUNT_USDT);
+    const [tradeAmountInput, setTradeAmountInput] = useState(String(DEFAULT_TRADE_AMOUNT_USDT));
+    useEffect(() => {
+        const stored = getTradeAmount();
+        setTradeAmountState(stored);
+        setTradeAmountInput(String(stored));
+    }, []);
+
+    const commitTradeAmount = () => {
+        const n = parseFloat(tradeAmountInput);
+        if (Number.isFinite(n) && n > 0) {
+            setTradeAmount(n);
+            setTradeAmountState(n);
+            setTradeAmountInput(String(n));
+        } else {
+            setTradeAmountInput(String(tradeAmount)); // revierte a lo último válido
+        }
+    };
 
     // Contador de generación: cada scan nuevo invalida al anterior de forma
     // permanente (a diferencia de un booleano compartido, no puede "revivir" si se resetea).
@@ -1423,11 +1403,23 @@ export default function PatronesPage() {
                         const bias     = meta.bias ?? 'neutral';
                         const conds    = getEntryConditions(data);
                         const condsMet = conds.filter(c => c.ok).length;
+                        const levels   = calcLevels(data);
 
-                        if (condsMet === conds.length && !calcLevels(data)?.extended) {
+                        if (condsMet === conds.length && !levels?.extended) {
                             notifiedRef.current.add(coin.id);
                             sendPatternNotification(coin, data, meta.label, bias);
-                            sendPatternEmail(coin, data, meta.label, bias, condsMet);
+
+                            // Apertura automática: sólo para patrones con ápice a 8-10 días
+                            // Y con TP2 favorable (R:R ≥ 2, misma etiqueta "Favorable" de la
+                            // tarjeta). tryAutoOpenPosition verifica en vivo contra Bitunix que
+                            // no haya ya una operativa en ese símbolo y que no se exceda el
+                            // máximo de operativas concurrentes antes de operar.
+                            if (isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
+                                autoTradedRef.current.add(coin.id);
+                                await tryAutoOpenPosition({
+                                    coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
+                                });
+                            }
                         }
                     }
                 }
@@ -1489,7 +1481,9 @@ export default function PatronesPage() {
             if (!conds.every(x => x.ok)) return false;
             // Si la entrada ya está extendida (precio se alejó del punto de entrada),
             // no se muestra como señal confirmada.
-            return !calcLevels(data)?.extended;
+            if (calcLevels(data)?.extended) return false;
+            // Sólo se muestran patrones cuyo ápice está a 8, 9 o 10 días.
+            return isApexTarget(data);
         })
         .sort((a, b) => {
             const ca = getEntryConditions(analysisCache[a.id].data).filter(c => c.ok).length;
@@ -1573,6 +1567,22 @@ export default function PatronesPage() {
                                 ⏰ Próximo auto-scan: {new Date(Date.now() + msUntilNextMexicoScan()).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} (Méx)
                             </span>
                         )}
+                        <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"
+                               title="Monto fijo (USDT) que se usa en cada apertura automática — se guarda hasta que lo cambies">
+                            <span className="text-gray-400 dark:text-slate-500 font-semibold">Monto/operación</span>
+                            <span className="text-gray-300 dark:text-slate-600">$</span>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={tradeAmountInput}
+                                onChange={e => setTradeAmountInput(e.target.value)}
+                                onBlur={commitTradeAmount}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="w-16 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
+                            />
+                            <span className="text-gray-300 dark:text-slate-600">USDT</span>
+                        </label>
                         <button
                             onClick={restartScan}
                             disabled={scanRunning}

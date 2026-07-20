@@ -97,10 +97,10 @@ const BITUNIX_TICKERS = [
 ];
 
 // ─── Sesión de Nueva York (única condición de validación) ─────────────────────
-// Encuentra la ventana [inicio, fin) de la sesión NY más reciente (hoy si ya
-// empezó, o la de ayer si todavía no llega la hora de apertura de hoy).
-// NYSE no opera sábado ni domingo, así que si "hoy" es sábado o domingo — o es
-// lunes pero su sesión aún no abre — la última sesión válida es la del viernes.
+// Encuentra la ventana [inicio, fin) de la sesión NY del día anterior (siempre
+// la última sesión completa, nunca la de hoy en curso). NYSE no opera sábado
+// ni domingo, así que si "hoy" es sábado, domingo o lunes — cuyo "ayer" sería
+// domingo, sin sesión — la última sesión válida es la del viernes.
 function buildSessionWindow(date) {
     const { startH, startM, endH, endM } = isUsDaylightSaving(date) ? NY_SESSION_EDT_UTC : NY_SESSION_EST_UTC;
     return {
@@ -118,15 +118,9 @@ function getLatestSessionWindow(now = new Date()) {
 
     if (dow === 0) return buildSessionWindow(new Date(now.getTime() - 2 * 86_400_000)); // domingo → viernes
     if (dow === 6) return buildSessionWindow(new Date(now.getTime() - 1 * 86_400_000)); // sábado  → viernes
+    if (dow === 1) return buildSessionWindow(new Date(now.getTime() - 3 * 86_400_000)); // lunes   → viernes ("ayer" sería domingo)
 
-    const { start: todayStart, end: todayEnd } = buildSessionWindow(now);
-
-    // Lunes antes de su apertura: "ayer" sería domingo (sin sesión) → retrocede hasta el viernes.
-    if (dow === 1 && now < todayStart) {
-        return buildSessionWindow(new Date(now.getTime() - 3 * 86_400_000));
-    }
-
-    if (now >= todayStart) return { start: todayStart, end: todayEnd };
+    // Martes a viernes: la sesión completa del día anterior.
     return buildSessionWindow(new Date(now.getTime() - 86_400_000));
 }
 
@@ -589,6 +583,7 @@ export default function AnalisisMercadoPage() {
     // Cobertura Bitunix vs Binance: ¿tenemos precio en vivo de Binance para este ticker?
     const foundCoins    = coins.filter(c => c.current_price != null);
     const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
+    const sessionWindow = getLatestSessionWindow();
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-6">
@@ -598,7 +593,7 @@ export default function AnalisisMercadoPage() {
                 <div className="mb-8">
                     <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Análisis de Mercado</h1>
                     <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
-                        Proximidad al máximo o mínimo de velas de 30 min dentro de la sesión de Nueva York (8:30 a.m. – 3:00 p.m. Méx) · señal entre 0% y 1% de distancia
+                        Proximidad al máximo o mínimo de velas de 30 min dentro de la sesión de Nueva York analizada ({fmtSessionTime(sessionWindow.start)} – {fmtSessionTime(sessionWindow.end)} Méx) · señal entre 0% y 1% de distancia
                     </p>
                     <div className="flex items-center gap-3 mt-3 flex-wrap">
                         {bitunixSymbols === null ? (

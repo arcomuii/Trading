@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
+import { isApexTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT } from "../lib/autoTrade";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -8,10 +9,16 @@ import { useState, useEffect, useRef } from "react";
 const GAP_MS       = 1_500;
 const RETRY_DELAYS = [15_000, 30_000, 60_000];
 
-// México (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6.
-// Horarios de escaneo automático en hora de México: 06:00, 10:00, 14:00, 18:00, 22:00, 02:00.
-// Convertidos a UTC (+6h): 12, 16, 20, 0, 4, 8.
-const MEXICO_SCAN_UTC_HOURS = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];
+// Re-escaneo automático cada 30 minutos, alineado al reloj (xx:00, xx:30) —
+// no a la hora en que se abrió la pestaña. Milisegundos hasta la próxima marca.
+function msUntilNextHalfHour() {
+    const now  = new Date();
+    const next = new Date(now);
+    next.setSeconds(0, 0);
+    if (now.getMinutes() < 30) next.setMinutes(30);
+    else { next.setMinutes(0); next.setHours(now.getHours() + 1); }
+    return next - now;
+}
 
 // Contratos disponibles en Bitunix Futures (snapshot estático en vez de fetch en vivo)
 const BITUNIX_TICKERS = [
@@ -76,22 +83,6 @@ const BITUNIX_TICKERS = [
     "ONE", "QQQ", "ASML", "MIRA", "DELL", "SCR", "1000CHEEMS", "TSM", "FTM",
 ];
 
-// Milisegundos hasta el próximo horario de escaneo (06/10/14/18/22/02h México), calculado
-// en UTC para no depender de la zona horaria del navegador del usuario.
-function msUntilNextMexicoScan() {
-    const now = new Date();
-    let next = null;
-    for (const h of MEXICO_SCAN_UTC_HOURS) {
-        for (const dayOffset of [0, 1]) {
-            const candidate = new Date(Date.UTC(
-                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + dayOffset,
-                h, 0, 0, 0
-            ));
-            if (candidate > now && (next === null || candidate < next)) next = candidate;
-        }
-    }
-    return next - now;
-}
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 async function requestNotifPermission() {
@@ -121,51 +112,6 @@ function sendPatternNotification(coin, result, patternLabel, bias) {
         n.onerror = (e) => console.error('[PatternNotif] Error:', e);
     } catch (e) {
         console.error('[PatternNotif] Excepción:', e);
-    }
-}
-
-async function sendPatternEmail(coin, result, patternLabel, bias, condsMet) {
-    try {
-        const conds  = getEntryConditions(result);
-        const levels = calcLevels(result);
-        const res = await fetch('/api/pattern-email', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                coinName:     coin.name,
-                symbol:       coin.symbol.toUpperCase(),
-                price:        result.curPrice,
-                image:        coin.image,
-                bitunixUrl:   `https://www.bitunix.com/es-es/contract-trade/${coin.symbol.toUpperCase()}USDT`,
-                patternLabel,
-                direction:    bias === 'bullish' ? 'LONG' : bias === 'bearish' ? 'SHORT' : 'NEUTRAL',
-                bias,
-                compression:  result.compression,
-                daysToApex:   result.daysToApex,
-                pricePos:     result.pricePos,
-                quality:      result.quality,
-                condsMet,
-                condsTotal:   conds.length,
-                conditions:   conds,
-                entry:        levels?.entry ?? null,
-                stopLoss:     levels?.sl ?? null,
-                takeProfit1:  levels?.tp1 ?? null,
-                takeProfit2:  levels?.tp2 ?? null,
-                takeProfit3:  levels?.tp3 ?? null,
-                riskReward1:  levels?.rr1 ?? null,
-                riskReward2:  levels?.rr2 ?? null,
-                riskReward3:  levels?.rr3 ?? null,
-                extended:        levels?.extended ?? false,
-                realRiskReward:  levels?.realRR ?? null,
-                breakevenWinRate: levels?.breakevenWinRate ?? null,
-                extendedScore:   levels?.extendedScore ?? null,
-            }),
-        });
-        const json = await res.json();
-        if (!res.ok) console.error('[PatternEmail] Error:', json);
-        else         console.log('[PatternEmail] Enviado:', coin.symbol, result.type);
-    } catch (e) {
-        console.error('[PatternEmail] Excepción:', e);
     }
 }
 
@@ -852,7 +798,7 @@ async function cancellableWait(ms, abortRef) {
 // order as market-triggered exits (tpOrderType/slOrderType = MARKET) so no separate
 // tpsl order call is needed.
 const INITIAL_LEVERAGE = 2;    // Apalancamiento inicial para todas las posiciones abiertas desde esta pantalla
-const MAX_LEVERAGE     = 5;    // Tope al que se escala si Bitunix rechaza la orden
+const MAX_LEVERAGE     = 10;    // Tope al que se escala si Bitunix rechaza la orden
 const BALANCE_PCT      = 0.10; // Porcentaje del saldo disponible usado como capital de la posición
 
 function OpenPositionModal({ coin, result, levels, onClose }) {
@@ -861,6 +807,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
     const [status,   setStatus]   = useState("loading"); // loading | idle | sending | success | error
     const [apiResp,  setApiResp]  = useState(null);
     const [leverage, setLeverage] = useState(INITIAL_LEVERAGE);
+    const [manualLeverage, setManualLeverage] = useState(INITIAL_LEVERAGE);
 
     const sym        = coin.symbol.toUpperCase();
     const symbolPair = `${sym}USDT`;
@@ -897,6 +844,17 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
     const capital = balance != null ? balance * BALANCE_PCT : null;
     const qty     = capital != null && levels.entry > 0 ? capital / levels.entry : null;
     const qtyStr  = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
+
+    // El apalancamiento no cambia la cantidad de la posición (qty ya está fija por
+    // BALANCE_PCT del saldo) ni la ganancia/pérdida en dólares — solo reduce el margen
+    // que queda comprometido para esa misma posición. Por eso el % estimado sube junto
+    // con el apalancamiento elegido: es el retorno sobre el margen, no sobre el capital total.
+    const dir      = isBull ? 1 : -1;
+    const margin   = capital != null ? capital / manualLeverage : null;
+    const pnlTp1   = qty != null ? qty * (levels.tp1 - levels.entry) * dir : null;
+    const pnlSl    = qty != null ? qty * (levels.sl  - levels.entry) * dir : null;
+    const roiTp1   = margin > 0 && pnlTp1 != null ? (pnlTp1 / margin) * 100 : null;
+    const roiSl    = margin > 0 && pnlSl  != null ? (pnlSl  / margin) * 100 : null;
 
     // Un intento completo: ajustar apalancamiento y luego colocar la orden.
     const attemptOrder = async (lev) => {
@@ -936,15 +894,16 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
         return { ok, data: { step: "place_order", leverage: lev, ...data } };
     };
 
-    // Si un intento falla, reintenta subiendo el apalancamiento (2x → 3x → 4x → 5x máx.)
-    // antes de rendirse — un rechazo por margen insuficiente puede resolverse con más
-    // apalancamiento (mismo capital, menor margen requerido); otros rechazos (p.ej.
-    // precisión de cantidad) fallarán igual en cada intento y se reportan tal cual.
+    // Parte del apalancamiento elegido manualmente. Si un intento falla, reintenta
+    // subiendo el apalancamiento (hasta MAX_LEVERAGE) antes de rendirse — un rechazo
+    // por margen insuficiente puede resolverse con más apalancamiento (mismo capital,
+    // menor margen requerido); otros rechazos (p.ej. precisión de cantidad) fallarán
+    // igual en cada intento y se reportan tal cual.
     const handleConfirm = async () => {
         if (!qtyStr) return;
         setStatus("sending");
         try {
-            let lev = INITIAL_LEVERAGE;
+            let lev = manualLeverage;
             let result = await attemptOrder(lev);
             while (!result.ok && lev < MAX_LEVERAGE) {
                 lev += 1;
@@ -1005,7 +964,29 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                                 </div>
                                 <div className="bg-amber-50 dark:bg-amber-950 rounded-xl p-3 text-center">
                                     <p className="text-amber-500 dark:text-amber-400 text-[10px] uppercase tracking-wide font-semibold mb-1">Apalancamiento</p>
-                                    <p className="font-bold text-sm text-amber-700 dark:text-amber-300">{leverage}×</p>
+                                    {status === "sending" ? (
+                                        <p className="font-bold text-sm text-amber-700 dark:text-amber-300">{leverage}×</p>
+                                    ) : (
+                                        <div className="flex items-center justify-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setManualLeverage(l => Math.max(1, l - 1))}
+                                                disabled={manualLeverage <= 1}
+                                                className="w-6 h-6 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-700 dark:text-amber-200 font-bold text-sm leading-none disabled:opacity-40"
+                                            >
+                                                −
+                                            </button>
+                                            <span className="font-bold text-sm text-amber-700 dark:text-amber-300 w-8 tabular-nums">{manualLeverage}×</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => setManualLeverage(l => Math.min(MAX_LEVERAGE, l + 1))}
+                                                disabled={manualLeverage >= MAX_LEVERAGE}
+                                                className="w-6 h-6 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-700 dark:text-amber-200 font-bold text-sm leading-none disabled:opacity-40"
+                                            >
+                                                +
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             <div className="grid grid-cols-3 gap-2 mb-4">
@@ -1022,8 +1003,23 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                                     <p className="text-xs font-bold text-green-700 dark:text-green-300 font-mono">${fmt(levels.tp1, dec)}</p>
                                 </div>
                             </div>
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                <div className="rounded-xl p-3 text-center bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800">
+                                    <p className="text-[9px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide mb-0.5">Ganancia potencial (TP1)</p>
+                                    <p className="text-sm font-bold text-green-700 dark:text-green-300 font-mono">+${fmt(pnlTp1, 2)}</p>
+                                    <p className="text-[10px] text-green-500 dark:text-green-400/80">+{fmt(roiTp1, 1)}% sobre margen</p>
+                                </div>
+                                <div className="rounded-xl p-3 text-center bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800">
+                                    <p className="text-[9px] font-semibold text-red-500 dark:text-red-400 uppercase tracking-wide mb-0.5">Pérdida potencial (SL)</p>
+                                    <p className="text-sm font-bold text-red-700 dark:text-red-300 font-mono">${fmt(pnlSl, 2)}</p>
+                                    <p className="text-[10px] text-red-500 dark:text-red-400/80">{fmt(roiSl, 1)}% sobre margen</p>
+                                </div>
+                            </div>
+                            <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-2 -mt-2 italic">
+                                El apalancamiento no cambia la ganancia/pérdida en dólares, solo el margen comprometido — por eso el % sube junto con el apalancamiento.
+                            </p>
                             <p className="text-sm text-gray-500 dark:text-slate-400 mb-2">
-                                Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{INITIAL_LEVERAGE}×</span> y se enviará una orden{" "}
+                                Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{manualLeverage}×</span> y se enviará una orden{" "}
                                 <span className="font-bold text-gray-800 dark:text-slate-100">LIMIT {isBull ? "BUY" : "SELL"}</span> por{" "}
                                 <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(capital, 2)}) a ${fmt(levels.entry, dec)}, con TP/SL adjuntos a mercado.
                             </p>
@@ -1597,7 +1593,31 @@ export default function PatronesPage() {
     const [activeFilter,   setActiveFilter]   = useState("all");
     const [showCoverage,   setShowCoverage]   = useState(false);
     const notifiedRef = useRef(new Set());
+    const autoTradedRef = useRef(new Set());
     const [notifPerm, setNotifPerm] = useState('default');
+
+    // Monto por operación (USDT) para la apertura automática — persistido en
+    // localStorage vía app/lib/autoTrade.js, se mantiene hasta que se cambie manualmente.
+    // Se inicializa con el valor por defecto (igual en servidor y cliente, evita
+    // desajustes de hidratación) y se sobreescribe con el valor guardado tras montar.
+    const [tradeAmount,      setTradeAmountState] = useState(DEFAULT_TRADE_AMOUNT_USDT);
+    const [tradeAmountInput, setTradeAmountInput] = useState(String(DEFAULT_TRADE_AMOUNT_USDT));
+    useEffect(() => {
+        const stored = getTradeAmount();
+        setTradeAmountState(stored);
+        setTradeAmountInput(String(stored));
+    }, []);
+
+    const commitTradeAmount = () => {
+        const n = parseFloat(tradeAmountInput);
+        if (Number.isFinite(n) && n > 0) {
+            setTradeAmount(n);
+            setTradeAmountState(n);
+            setTradeAmountInput(String(n));
+        } else {
+            setTradeAmountInput(String(tradeAmount)); // revierte a lo último válido
+        }
+    };
 
     // Contador de generación: cada scan nuevo invalida al anterior de forma
     // permanente (a diferencia de un booleano compartido, no puede "revivir" si se resetea).
@@ -1716,11 +1736,23 @@ export default function PatronesPage() {
                         const bias     = meta.bias ?? 'neutral';
                         const conds    = getEntryConditions(data);
                         const condsMet = conds.filter(c => c.ok).length;
+                        const levels   = calcLevels(data);
 
-                        if (condsMet === conds.length && !calcLevels(data)?.extended) {
+                        if (condsMet === conds.length && !levels?.extended) {
                             notifiedRef.current.add(coin.id);
                             sendPatternNotification(coin, data, meta.label, bias);
-                            sendPatternEmail(coin, data, meta.label, bias, condsMet);
+
+                            // Apertura automática: sólo para patrones con ápice a 8-10 días
+                            // Y con TP2 favorable (R:R ≥ 2, misma etiqueta "Favorable" de la
+                            // tarjeta). tryAutoOpenPosition verifica en vivo contra Bitunix que
+                            // no haya ya una operativa en ese símbolo y que no se exceda el
+                            // máximo de operativas concurrentes antes de operar.
+                            if (isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
+                                autoTradedRef.current.add(coin.id);
+                                await tryAutoOpenPosition({
+                                    coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
+                                });
+                            }
                         }
                     }
                 }
@@ -1758,7 +1790,7 @@ export default function PatronesPage() {
         scanRunningRef.current = scanRunning;
     });
 
-    // ─── Scan automático diario a las 06:00 a.m. hora de México ───────────────
+    // ─── Scan automático cada 30 minutos, alineado a :00 y :30 ────────────────
     useEffect(() => {
         let timeoutId;
         const scheduleNext = () => {
@@ -1766,8 +1798,8 @@ export default function PatronesPage() {
                 if (!scanRunningRef.current && coinsRef.current.length > 0) {
                     runScanRef.current?.(coinsRef.current);
                 }
-                scheduleNext(); // reprograma para el día siguiente
-            }, msUntilNextMexicoScan());
+                scheduleNext(); // reprograma para la siguiente marca de :00/:30
+            }, msUntilNextHalfHour());
         };
         scheduleNext();
         return () => clearTimeout(timeoutId);
@@ -1782,7 +1814,9 @@ export default function PatronesPage() {
             if (!conds.every(x => x.ok)) return false;
             // Si la entrada ya está extendida (precio se alejó del punto de entrada),
             // no se muestra como señal confirmada.
-            return !calcLevels(data)?.extended;
+            if (calcLevels(data)?.extended) return false;
+            // Sólo se muestran patrones cuyo ápice está a 8, 9 o 10 días.
+            return isApexTarget(data);
         })
         .sort((a, b) => {
             const ca = getEntryConditions(analysisCache[a.id].data).filter(c => c.ok).length;
@@ -1862,10 +1896,26 @@ export default function PatronesPage() {
                             </span>
                         )}
                         {!scanRunning && (
-                            <span className="text-xs text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2.5 py-1 rounded-full" title="Scan automático 6 veces al día (06/10/14/18/22/02h) hora de México">
-                                ⏰ Próximo auto-scan: {new Date(Date.now() + msUntilNextMexicoScan()).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} (Méx)
+                            <span className="text-xs text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2.5 py-1 rounded-full" title="Scan automático cada 30 minutos, alineado a :00 y :30">
+                                ⏰ Próximo auto-scan: {new Date(Date.now() + msUntilNextHalfHour()).toLocaleTimeString("es-MX", { hour: '2-digit', minute: '2-digit' })}
                             </span>
                         )}
+                        <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"
+                               title="Monto fijo (USDT) que se usa en cada apertura automática — se guarda hasta que lo cambies">
+                            <span className="text-gray-400 dark:text-slate-500 font-semibold">Monto/operación</span>
+                            <span className="text-gray-300 dark:text-slate-600">$</span>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={tradeAmountInput}
+                                onChange={e => setTradeAmountInput(e.target.value)}
+                                onBlur={commitTradeAmount}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="w-16 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
+                            />
+                            <span className="text-gray-300 dark:text-slate-600">USDT</span>
+                        </label>
                         <button
                             onClick={restartScan}
                             disabled={scanRunning}
