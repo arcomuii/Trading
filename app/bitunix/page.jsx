@@ -46,122 +46,132 @@ function fmtDate(ts) {
     return d.toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
 }
 
-// ─── PriceGauge ──────────────────────────────────────────────────────────────
+// ─── CandleChart ──────────────────────────────────────────────────────────────
+// Mini gráfico de velas 4H (Binance) con líneas de referencia para Entrada/TP/SL
+// superpuestas, para ver de un vistazo si el precio se está acercando al
+// take-profit o al stop-loss — reemplaza el gauge horizontal anterior.
+function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
+    const [candles, setCandles] = useState(null);
+    const [error,   setError]   = useState(null);
 
-function PriceGauge({ entry, current, tp, sl }) {
-    const vals = {
-        entry:   parseFloat(entry),
-        current: parseFloat(current),
-        tp:      parseFloat(tp),
-        sl:      parseFloat(sl),
-    };
-    const def = Object.fromEntries(Object.entries(vals).filter(([, v]) => !isNaN(v) && v > 0));
-    const prices = Object.values(def);
-    if (prices.length < 2) {
-        return <p className="text-center text-gray-400 dark:text-slate-500 text-sm py-4">Sin datos de precio suficientes</p>;
+    useEffect(() => {
+        if (!symbol) return;
+
+        const fetchCandles = (isFirst) => {
+            if (isFirst) setCandles(null);
+            setError(null);
+            fetch(`/api/binance/api/v3/klines?symbol=${symbol}&interval=4h&limit=30`)
+                .then(r => r.json())
+                .then(raw => {
+                    if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
+                    setCandles(raw.map(([, open, high, low, close]) => ({
+                        open:  parseFloat(open),
+                        high:  parseFloat(high),
+                        low:   parseFloat(low),
+                        close: parseFloat(close),
+                    })));
+                })
+                .catch(err => setError(err.message));
+        };
+
+        fetchCandles(true);
+        const id = setInterval(() => fetchCandles(false), 60_000);
+        return () => clearInterval(id);
+    }, [symbol]);
+
+    const entryNum = parseFloat(entry);
+    const tpNum    = parseFloat(tp);
+    const slNum    = parseFloat(sl);
+    const curNum   = parseFloat(currentPrice);
+
+    const distSl = curNum && slNum ? (curNum - slNum) / curNum * 100 : null;
+    const distTp = curNum && tpNum ? (tpNum - curNum) / curNum * 100 : null;
+
+    if (error) {
+        return <p className="text-center text-red-400 dark:text-red-500 text-xs py-4">No se pudieron cargar las velas: {error}</p>;
+    }
+    if (!candles) {
+        return (
+            <div className="flex items-center justify-center py-10 text-gray-300 dark:text-slate-600 gap-2 text-sm">
+                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+                Cargando velas 4H…
+            </div>
+        );
+    }
+    if (candles.length === 0) {
+        return <p className="text-center text-gray-400 dark:text-slate-500 text-sm py-4">Sin datos de velas para {symbol}</p>;
     }
 
-    const minP   = Math.min(...prices);
-    const maxP   = Math.max(...prices);
-    const spread = maxP - minP || minP * 0.01;
-    const pad    = spread * 0.18;
+    const refPrices = [entryNum, tpNum, slNum, curNum].filter(v => !isNaN(v) && v > 0);
+    const allPrices = [...candles.map(c => c.high), ...candles.map(c => c.low), ...refPrices];
+    const minP   = Math.min(...allPrices);
+    const maxP   = Math.max(...allPrices);
+    const spread = (maxP - minP) || minP * 0.01;
+    const pad    = spread * 0.1;
     const lo     = minP - pad;
     const hi     = maxP + pad;
-    const total  = hi - lo;
+    const total  = hi - lo || 1;
 
-    const W = 460, trackY = 46, trackH = 10, LEFT = 24, RIGHT = W - 24;
-    const trackW = RIGHT - LEFT;
-    const px = v => LEFT + ((v - lo) / total) * trackW;
+    const W = 460, H = 170, LEFT = 6, RIGHT = W - 56, TOP = 10, BOTTOM = H - 18;
+    const chartH = BOTTOM - TOP;
+    const slot   = (RIGHT - LEFT) / candles.length;
+    const bodyW  = Math.max(1.5, slot * 0.6);
+    const y = v => TOP + (1 - (v - lo) / total) * chartH;
 
-    // distance from current to SL / TP (as % of current price)
-    const distSl = def.current && def.sl
-        ? (def.current - def.sl) / def.current * 100
-        : null;
-    const distTp = def.current && def.tp
-        ? (def.tp - def.current) / def.current * 100
-        : null;
-
-    // clamp label x so it never overflows the SVG
-    const clamp = (x, w = 28) => Math.max(LEFT + w / 2, Math.min(RIGHT - w / 2, x));
+    const refLines = [
+        { key: "entry", value: entryNum, color: "#6366f1", label: "Entrada" },
+        { key: "tp",    value: tpNum,    color: "#22c55e", label: "TP" },
+        { key: "sl",    value: slNum,    color: "#ef4444", label: "SL" },
+    ].filter(r => !isNaN(r.value) && r.value > 0);
 
     return (
         <div>
-            <svg viewBox={`0 0 ${W} 94`} className="w-full">
-                {/* Base track */}
-                <rect x={LEFT} y={trackY} width={trackW} height={trackH} rx="5" fill="#e2e8f0" />
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+                {/* Velas */}
+                {candles.map((c, i) => {
+                    const x    = LEFT + i * slot + slot / 2;
+                    const up   = c.close >= c.open;
+                    const color = up ? "#22c55e" : "#ef4444";
+                    const top  = y(Math.max(c.open, c.close));
+                    const bot  = y(Math.min(c.open, c.close));
+                    return (
+                        <g key={i}>
+                            <line x1={x} y1={y(c.high)} x2={x} y2={y(c.low)} stroke={color} strokeWidth="1" />
+                            <rect x={x - bodyW / 2} y={top} width={bodyW} height={Math.max(1, bot - top)} fill={color} />
+                        </g>
+                    );
+                })}
 
-                {/* Red zone: SL → entry (danger) */}
-                {def.sl && def.entry && (
-                    <rect
-                        x={px(Math.min(def.sl, def.entry))}
-                        y={trackY}
-                        width={Math.abs(px(def.entry) - px(def.sl))}
-                        height={trackH}
-                        fill="#fee2e2"
-                    />
-                )}
+                {/* Líneas de referencia: Entrada / TP / SL */}
+                {refLines.map(r => (
+                    <g key={r.key}>
+                        <line x1={LEFT} y1={y(r.value)} x2={RIGHT} y2={y(r.value)}
+                              stroke={r.color} strokeWidth="1.3" strokeDasharray="4,3" />
+                        <text x={RIGHT + 4} y={y(r.value) + 3} fontSize="9" fontWeight="bold" fill={r.color}>
+                            {r.label}
+                        </text>
+                    </g>
+                ))}
 
-                {/* Green zone: entry → TP (profit) */}
-                {def.entry && def.tp && (
-                    <rect
-                        x={px(Math.min(def.entry, def.tp))}
-                        y={trackY}
-                        width={Math.abs(px(def.tp) - px(def.entry))}
-                        height={trackH}
-                        fill="#dcfce7"
-                    />
-                )}
-
-                {/* SL marker */}
-                {def.sl && (
+                {/* Precio actual */}
+                {!isNaN(curNum) && curNum > 0 && (
                     <>
-                        <line x1={px(def.sl)} y1={trackY - 10} x2={px(def.sl)} y2={trackY + trackH + 10}
-                              stroke="#ef4444" strokeWidth="2" />
-                        <text x={clamp(px(def.sl))} y={trackY - 14}
-                              textAnchor="middle" fill="#ef4444" fontSize="10" fontWeight="bold">SL</text>
-                        <text x={clamp(px(def.sl), 70)} y={trackY + trackH + 20}
-                              textAnchor="middle" fill="#ef4444" fontSize="8.5">${fmt(def.sl, 8)}</text>
-                    </>
-                )}
-
-                {/* TP marker */}
-                {def.tp && (
-                    <>
-                        <line x1={px(def.tp)} y1={trackY - 10} x2={px(def.tp)} y2={trackY + trackH + 10}
-                              stroke="#22c55e" strokeWidth="2" />
-                        <text x={clamp(px(def.tp))} y={trackY - 14}
-                              textAnchor="middle" fill="#22c55e" fontSize="10" fontWeight="bold">TP</text>
-                        <text x={clamp(px(def.tp), 70)} y={trackY + trackH + 20}
-                              textAnchor="middle" fill="#22c55e" fontSize="8.5">${fmt(def.tp, 8)}</text>
-                    </>
-                )}
-
-                {/* Entry marker (dashed) */}
-                {def.entry && (
-                    <>
-                        <line x1={px(def.entry)} y1={trackY - 5} x2={px(def.entry)} y2={trackY + trackH + 5}
-                              stroke="#6366f1" strokeWidth="1.5" strokeDasharray="3,2" />
-                        <text x={clamp(px(def.entry))} y={trackY + trackH + 32}
-                              textAnchor="middle" fill="#6366f1" fontSize="8">Entrada</text>
-                    </>
-                )}
-
-                {/* Current price dot */}
-                {def.current && (
-                    <>
-                        <circle cx={px(def.current)} cy={trackY + trackH / 2} r="8"
-                                fill="#1e293b" stroke="white" strokeWidth="2" />
-                        <text x={clamp(px(def.current))} y={trackY - 14}
-                              textAnchor="middle" fill="#1e293b" fontSize="9" fontWeight="bold">
-                            ${fmt(def.current)}
+                        <circle cx={RIGHT} cy={y(curNum)} r="3.5" fill="#1e293b" stroke="white" strokeWidth="1.5" />
+                        <text x={RIGHT - 6} y={y(curNum) - 6} textAnchor="end" fontSize="9" fontWeight="bold" fill="#64748b">
+                            ${fmt(curNum, 8)}
                         </text>
                     </>
                 )}
             </svg>
+            <p className="text-center text-[10px] text-gray-400 dark:text-slate-500 mt-1">
+                Últimas {candles.length} velas de 4H · {symbol}
+            </p>
 
             {/* Distance stats */}
             {(distSl !== null || distTp !== null) && (
-                <div className="flex justify-around mt-1 text-xs border-t border-gray-100 dark:border-slate-700 pt-3">
+                <div className="flex justify-around mt-2 text-xs border-t border-gray-100 dark:border-slate-700 pt-3">
                     {distSl !== null && (
                         <div className="text-center">
                             <p className="text-gray-400 dark:text-slate-500 mb-0.5">Distancia al SL</p>
@@ -170,10 +180,10 @@ function PriceGauge({ entry, current, tp, sl }) {
                             </p>
                         </div>
                     )}
-                    {def.current && (
+                    {!isNaN(curNum) && curNum > 0 && (
                         <div className="text-center">
                             <p className="text-gray-400 dark:text-slate-500 mb-0.5">Precio actual</p>
-                            <p className="font-bold text-sm text-gray-800 dark:text-slate-100">${fmt(def.current)}</p>
+                            <p className="font-bold text-sm text-gray-800 dark:text-slate-100">${fmt(curNum, 8)}</p>
                         </div>
                     )}
                     {distTp !== null && (
@@ -305,13 +315,14 @@ function TpSlModal({ position, currentPrice, onClose }) {
                         </div>
                     ) : (
                         <>
-                            {/* Price gauge */}
+                            {/* Candle chart */}
                             {hasData ? (
-                                <PriceGauge
+                                <CandleChart
+                                    symbol={position.symbol}
                                     entry={entryPrice}
-                                    current={currentPrice}
                                     tp={tp}
                                     sl={sl}
+                                    currentPrice={currentPrice}
                                 />
                             ) : (
                                 <div className="text-center py-8 text-gray-400 dark:text-slate-500">
@@ -331,13 +342,13 @@ function TpSlModal({ position, currentPrice, onClose }) {
                                 {[
                                     { label: "Entrada",     value: entryPrice,   color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-950" },
                                     { label: "Actual",      value: currentPrice, color: "text-gray-800 dark:text-slate-100",    bg: "bg-gray-50 dark:bg-slate-800"    },
-                                    { label: "Take Profit", value: tp,           color: "text-green-600 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-950",   dec: 8 },
-                                    { label: "Stop Loss",   value: sl,           color: "text-red-500 dark:text-red-400",       bg: "bg-red-50 dark:bg-red-950",       dec: 8 },
-                                ].map(({ label, value, color, bg, dec }) => (
+                                    { label: "Take Profit", value: tp,           color: "text-green-600 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-950"   },
+                                    { label: "Stop Loss",   value: sl,           color: "text-red-500 dark:text-red-400",       bg: "bg-red-50 dark:bg-red-950"       },
+                                ].map(({ label, value, color, bg }) => (
                                     <div key={label} className={`${bg} rounded-xl p-3 text-center`}>
                                         <p className="text-gray-400 dark:text-slate-500 text-[10px] uppercase tracking-wide font-semibold mb-1">{label}</p>
                                         <p className={`font-bold text-sm ${color} tabular-nums`}>
-                                            {value ? `$${fmt(value, dec ?? 2)}` : "—"}
+                                            {value ? `$${fmt(value, 8)}` : "—"}
                                         </p>
                                     </div>
                                 ))}
@@ -557,6 +568,17 @@ const ENDPOINTS = [
 // tiempo abierta (ver columna "Velas 4H") — el cierre ya no es automático, sólo
 // una señal visual para que se decida manualmente.
 const STALE_CANDLES_THRESHOLD = 15;
+const CANDLE_4H_MS = 4 * 3600 * 1000;
+
+// Velas de 4H transcurridas desde la apertura, alineadas a la rejilla real de
+// velas (UTC 00/04/08/12/16/20) en vez de un simple cociente de tiempo —
+// dividir el tiempo transcurrido entre 4h subcuenta cuando la apertura no cae
+// justo en un límite de vela (ej. abrir a las 05:34 ya está dentro de la vela
+// 04:00-08:00, no a la mitad de un período de 4h contado desde ese momento).
+function candlesElapsed4h(openTimeMs) {
+    const openCandleStart = Math.floor(openTimeMs / CANDLE_4H_MS) * CANDLE_4H_MS;
+    return Math.floor((Date.now() - openCandleStart) / CANDLE_4H_MS);
+}
 
 function extractList(json) {
     if (!json?.data) return [];
@@ -853,7 +875,7 @@ export default function BitunixPage() {
                                                 const margin     = pick(o, "margin","initialMargin","positionMargin","im","posMargin","frozenMargin");
                                                 const openTime   = pick(o, "createTime","openTime","ctime","createdAt","createTimestamp","time");
                                                 const candles4h  = openTime != null
-                                                    ? Math.floor((Date.now() - Number(openTime)) / (4 * 3600 * 1000))
+                                                    ? candlesElapsed4h(Number(openTime))
                                                     : null;
 
                                                 return (

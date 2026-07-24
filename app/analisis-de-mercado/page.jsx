@@ -8,12 +8,14 @@ import { useState, useEffect, useRef } from "react";
 const GAP_MS       = 1_500;
 const RETRY_DELAYS = [15_000, 30_000, 60_000];
 
-// Horario de la bolsa de Nueva York (9:30 a.m. – 4:00 p.m. hora del Este), en
-// UTC. CDMX es siempre UTC-6, pero el Este de EE.UU. sí cambia de horario:
-// EST (invierno, UTC-5) → sesión 8:30 a.m. – 3:00 p.m. Méx.
-// EDT (verano,   UTC-4) → sesión 7:30 a.m. – 2:00 p.m. Méx (una hora antes).
-const NY_SESSION_EST_UTC = { startH: 14, startM: 30, endH: 21, endM: 0 }; // 8:30–15:00 Méx
-const NY_SESSION_EDT_UTC = { startH: 13, startM: 30, endH: 20, endM: 0 }; // 7:30–14:00 Méx
+// Horario de la sesión forex de Nueva York (8:00 a.m. – 5:00 p.m. hora del
+// Este — la que usan los traders de divisas, no el horario oficial de la
+// bolsa de acciones NYSE), en UTC. CDMX es siempre UTC-6, pero el Este de
+// EE.UU. sí cambia de horario:
+// EST (invierno, UTC-5) → sesión 7:00 a.m. – 4:00 p.m. Méx.
+// EDT (verano,   UTC-4) → sesión 6:00 a.m. – 3:00 p.m. Méx (una hora antes).
+const NY_SESSION_EST_UTC = { startH: 13, startM: 0, endH: 22, endM: 0 }; // 7:00–16:00 Méx
+const NY_SESSION_EDT_UTC = { startH: 12, startM: 0, endH: 21, endM: 0 }; // 6:00–15:00 Méx
 
 // Reglas vigentes desde 2007: DST empieza el 2º domingo de marzo (2 a.m. hora
 // local EST) y termina el 1er domingo de noviembre (2 a.m. hora local EDT).
@@ -98,9 +100,9 @@ const BITUNIX_TICKERS = [
 
 // ─── Sesión de Nueva York (única condición de validación) ─────────────────────
 // Encuentra la ventana [inicio, fin) de la sesión NY del día anterior (siempre
-// la última sesión completa, nunca la de hoy en curso). NYSE no opera sábado
-// ni domingo, así que si "hoy" es sábado, domingo o lunes — cuyo "ayer" sería
-// domingo, sin sesión — la última sesión válida es la del viernes.
+// la última sesión completa, nunca la de hoy en curso). El mercado forex no
+// opera sábado ni domingo, así que si "hoy" es sábado, domingo o lunes — cuyo
+// "ayer" sería domingo, sin sesión — la última sesión válida es la del viernes.
 function buildSessionWindow(date) {
     const { startH, startM, endH, endM } = isUsDaylightSaving(date) ? NY_SESSION_EDT_UTC : NY_SESSION_EST_UTC;
     return {
@@ -125,7 +127,7 @@ function getLatestSessionWindow(now = new Date()) {
 }
 
 // Único chequeo: ¿el precio actual está a 1%–2% del máximo o del mínimo
-// alcanzado por las velas de 30 min dentro de la sesión NY (8:30–15:00 Méx)?
+// alcanzado por las velas de 30 min dentro de la sesión forex NY (6:00–15:00 Méx en verano)?
 function detectSessionProximity(candles) {
     const { start, end } = getLatestSessionWindow();
     const sessionCandles = candles.filter(c => c.openTime >= start.getTime() && c.openTime < end.getTime());
@@ -295,8 +297,150 @@ async function cancellableWait(ms, abortRef) {
     }
 }
 
+// ─── SessionChartModal ──────────────────────────────────────────────────────────
+// No es posible dibujar directamente sobre el chart de Bitunix/TradingView desde
+// un botón externo (no exponen una API pública para inyectar anotaciones) — en su
+// lugar, este modal dibuja las velas de 30m dentro de esta misma app con un
+// cuadro que encierra el máximo y el mínimo de la sesión NY analizada.
+function SessionChartModal({ coin, result, onClose }) {
+    const [candles, setCandles] = useState(null);
+    const [error,   setError]   = useState(null);
+
+    useEffect(() => {
+        const h = e => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    useEffect(() => {
+        const symbol = `${coin.symbol.toUpperCase()}USDT`;
+        fetch(`/api/binance/api/v3/klines?symbol=${symbol}&interval=30m&limit=100`)
+            .then(r => r.json())
+            .then(raw => {
+                if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
+                setCandles(raw.map(([openTime, open, high, low, close]) => ({
+                    openTime,
+                    open:  parseFloat(open),
+                    high:  parseFloat(high),
+                    low:   parseFloat(low),
+                    close: parseFloat(close),
+                })));
+            })
+            .catch(err => setError(err.message));
+    }, [coin.symbol]);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800">
+                    <div>
+                        <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">{coin.symbol.toUpperCase()}</h2>
+                        <p className="text-gray-400 dark:text-slate-500 text-xs mt-0.5">
+                            Velas 30m · sesión NY {fmtSessionTime(result.sessionStart)}–{fmtSessionTime(result.sessionEnd)} (Méx)
+                        </p>
+                    </div>
+                    <button onClick={onClose}
+                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+                <div className="px-6 py-5">
+                    {error ? (
+                        <p className="text-center text-red-400 dark:text-red-500 text-xs py-8">No se pudieron cargar las velas: {error}</p>
+                    ) : !candles ? (
+                        <div className="flex items-center justify-center py-16 text-gray-300 dark:text-slate-600 gap-2 text-sm">
+                            <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            Cargando velas…
+                        </div>
+                    ) : (
+                        <SessionCandleChart candles={candles} result={result} />
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function SessionCandleChart({ candles, result }) {
+    const { sessionHigh, sessionLow, sessionStart, sessionEnd, curPrice } = result;
+
+    const allPrices = [...candles.map(c => c.high), ...candles.map(c => c.low), sessionHigh, sessionLow, curPrice]
+        .filter(v => v != null && !isNaN(v));
+    const minP   = Math.min(...allPrices);
+    const maxP   = Math.max(...allPrices);
+    const spread = (maxP - minP) || minP * 0.01;
+    const pad    = spread * 0.1;
+    const lo     = minP - pad;
+    const hi     = maxP + pad;
+    const total  = hi - lo || 1;
+
+    const W = 620, H = 220, LEFT = 6, RIGHT = W - 6, TOP = 10, BOTTOM = H - 18;
+    const chartH = BOTTOM - TOP;
+    const slot   = (RIGHT - LEFT) / candles.length;
+    const bodyW  = Math.max(1.5, slot * 0.6);
+    const y = v => TOP + (1 - (v - lo) / total) * chartH;
+
+    // Índices de velas dentro de la ventana horaria de la sesión NY — el cuadro
+    // se dibuja abarcando exactamente esas velas, no todo el ancho del gráfico.
+    const startMs = sessionStart.getTime(), endMs = sessionEnd.getTime();
+    const sessionIdxs = candles.reduce((acc, c, i) => {
+        if (c.openTime >= startMs && c.openTime < endMs) acc.push(i);
+        return acc;
+    }, []);
+    const boxX1 = sessionIdxs.length ? LEFT + sessionIdxs[0] * slot : null;
+    const boxX2 = sessionIdxs.length ? LEFT + (sessionIdxs[sessionIdxs.length - 1] + 1) * slot : null;
+
+    return (
+        <div>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+                {/* Cuadro que encierra el máximo y el mínimo de la sesión NY */}
+                {boxX1 != null && (
+                    <rect x={boxX1} y={y(sessionHigh)} width={Math.max(1, boxX2 - boxX1)}
+                          height={Math.max(1, y(sessionLow) - y(sessionHigh))}
+                          fill="rgba(99,102,241,0.08)" stroke="#6366f1" strokeWidth="1.5" strokeDasharray="5,3" />
+                )}
+
+                {/* Velas */}
+                {candles.map((c, i) => {
+                    const x    = LEFT + i * slot + slot / 2;
+                    const up   = c.close >= c.open;
+                    const color = up ? "#22c55e" : "#ef4444";
+                    const top  = y(Math.max(c.open, c.close));
+                    const bot  = y(Math.min(c.open, c.close));
+                    return (
+                        <g key={i}>
+                            <line x1={x} y1={y(c.high)} x2={x} y2={y(c.low)} stroke={color} strokeWidth="1" />
+                            <rect x={x - bodyW / 2} y={top} width={bodyW} height={Math.max(1, bot - top)} fill={color} />
+                        </g>
+                    );
+                })}
+
+                {/* Líneas de máximo/mínimo de sesión, a lo largo de todo el ancho */}
+                <line x1={LEFT} y1={y(sessionHigh)} x2={RIGHT} y2={y(sessionHigh)} stroke="#ef4444" strokeWidth="1" strokeDasharray="3,3" opacity="0.6" />
+                <line x1={LEFT} y1={y(sessionLow)}  x2={RIGHT} y2={y(sessionLow)}  stroke="#22c55e" strokeWidth="1" strokeDasharray="3,3" opacity="0.6" />
+            </svg>
+            <div className="flex justify-around mt-2 text-xs border-t border-gray-100 dark:border-slate-700 pt-3">
+                <div className="text-center">
+                    <p className="text-gray-400 dark:text-slate-500 mb-0.5">Máximo sesión</p>
+                    <p className="font-bold text-sm text-red-500 dark:text-red-400">{fmtPrice(sessionHigh)}</p>
+                </div>
+                <div className="text-center">
+                    <p className="text-gray-400 dark:text-slate-500 mb-0.5">Mínimo sesión</p>
+                    <p className="font-bold text-sm text-green-600 dark:text-green-400">{fmtPrice(sessionLow)}</p>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ─── SessionCard ────────────────────────────────────────────────────────────────
 function SessionCard({ coin, result, updatedAt }) {
+    const [showChart, setShowChart] = useState(false);
     const isHigh = result.direction === 'high';
     const color  = isHigh ? 'text-red-500 dark:text-red-400'   : 'text-green-600 dark:text-green-400';
     const bg     = isHigh ? 'bg-red-50 dark:bg-red-950'        : 'bg-green-50 dark:bg-green-950';
@@ -306,6 +450,7 @@ function SessionCard({ coin, result, updatedAt }) {
     const lv = calcSessionLevels(result);
 
     return (
+        <>
         <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-800 p-5">
             {lv && (
                 <div className={`flex items-center justify-between mb-3 rounded-xl px-3 py-2 ${
@@ -373,10 +518,16 @@ function SessionCard({ coin, result, updatedAt }) {
             </p>
 
             <div className="flex items-center justify-between border-t border-gray-100 dark:border-slate-800 pt-3">
-                <a href={bitunixUrl} target="_blank" rel="noopener noreferrer"
-                   className="text-xs font-semibold text-indigo-500 hover:text-indigo-700">
-                    Ver en Bitunix →
-                </a>
+                <div className="flex items-center gap-3">
+                    <a href={bitunixUrl} target="_blank" rel="noopener noreferrer"
+                       className="text-xs font-semibold text-indigo-500 hover:text-indigo-700">
+                        Ver en Bitunix →
+                    </a>
+                    <button type="button" onClick={() => setShowChart(true)}
+                            className="text-xs font-semibold text-gray-500 dark:text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400">
+                        📊 Ver gráfico
+                    </button>
+                </div>
                 {updatedAt && (
                     <span className="text-[10px] text-gray-300 dark:text-slate-600">
                         {updatedAt.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
@@ -384,6 +535,11 @@ function SessionCard({ coin, result, updatedAt }) {
                 )}
             </div>
         </div>
+
+        {showChart && (
+            <SessionChartModal coin={coin} result={result} onClose={() => setShowChart(false)} />
+        )}
+        </>
     );
 }
 

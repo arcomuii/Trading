@@ -61,20 +61,26 @@ function isWeekdayInZone(date, timeZone) {
     return wd !== 'Sat' && wd !== 'Sun'
 }
 
-// Horarios de NYSE (9:30 a.m.–4:00 p.m. hora del Este) y de las bolsas de
-// Shanghái/Shenzhen (9:30–11:30 y 13:00–15:00 hora de China), traducidos a
-// hora de CDMX. Se recalculan sobre la fecha de hoy para que NYSE se ajuste
-// automáticamente entre EDT (verano) y EST (invierno).
-function getMarketHours() {
+// Horarios de las 4 sesiones de forex (Londres, Nueva York, Sídney, Tokio),
+// definidos en la hora LOCAL de cada plaza y traducidos a CDMX (ver
+// zonedTimeToUtcDate arriba) — así cada sesión se ajusta sola a su propio
+// horario de verano/invierno (Londres y Nueva York sí tienen DST; Sídney lo
+// tiene pero en fechas opuestas, hemisferio sur; Tokio nunca tiene DST). Los
+// horarios en CDMX que dio el usuario (ej. Sídney 4:00 p.m.–1:00 a.m.) son solo
+// una foto del verano boreal — la hora local de cada plaza es la que no cambia:
+// Londres 8:00–16:00, Nueva York 8:00–17:00, Sídney 8:00–17:00, Tokio 9:00–18:00.
+function getForexSessionHours() {
     const now = new Date()
     const y = now.getUTCFullYear(), mo = now.getUTCMonth() + 1, d = now.getUTCDate()
     return {
-        nyseOpen:     zonedTimeToUtcDate(y, mo, d, 9, 30, 'America/New_York'),
-        nyseClose:    zonedTimeToUtcDate(y, mo, d, 16, 0, 'America/New_York'),
-        chinaAmOpen:  zonedTimeToUtcDate(y, mo, d, 9, 30, 'Asia/Shanghai'),
-        chinaAmClose: zonedTimeToUtcDate(y, mo, d, 11, 30, 'Asia/Shanghai'),
-        chinaPmOpen:  zonedTimeToUtcDate(y, mo, d, 13, 0, 'Asia/Shanghai'),
-        chinaPmClose: zonedTimeToUtcDate(y, mo, d, 15, 0, 'Asia/Shanghai'),
+        londonOpen:  zonedTimeToUtcDate(y, mo, d, 8, 0, 'Europe/London'),
+        londonClose: zonedTimeToUtcDate(y, mo, d, 16, 0, 'Europe/London'),
+        nyFxOpen:    zonedTimeToUtcDate(y, mo, d, 8, 0, 'America/New_York'),
+        nyFxClose:   zonedTimeToUtcDate(y, mo, d, 17, 0, 'America/New_York'),
+        sydneyOpen:  zonedTimeToUtcDate(y, mo, d, 8, 0, 'Australia/Sydney'),
+        sydneyClose: zonedTimeToUtcDate(y, mo, d, 17, 0, 'Australia/Sydney'),
+        tokyoOpen:   zonedTimeToUtcDate(y, mo, d, 9, 0, 'Asia/Tokyo'),
+        tokyoClose:  zonedTimeToUtcDate(y, mo, d, 18, 0, 'Asia/Tokyo'),
     }
 }
 
@@ -343,13 +349,12 @@ export default function DashboardPage() {
     const hist30 = history.filter(e => e.date >= cutoff)
     const pnlSer = buildPnlSeries(hist30)
     const monthly = buildMonthlyMap(history)
-    const mh = getMarketHours()
+    const fx = getForexSessionHours()
     const nowTick    = new Date()
-    const nyseIsOpen = isWeekdayInZone(nowTick, 'America/New_York') && nowTick >= mh.nyseOpen && nowTick < mh.nyseClose
-    const chinaIsOpen = isWeekdayInZone(nowTick, 'Asia/Shanghai') && (
-        (nowTick >= mh.chinaAmOpen && nowTick < mh.chinaAmClose) ||
-        (nowTick >= mh.chinaPmOpen && nowTick < mh.chinaPmClose)
-    )
+    const londonIsOpen = isWeekdayInZone(nowTick, 'Europe/London')     && nowTick >= fx.londonOpen && nowTick < fx.londonClose
+    const nyFxIsOpen   = isWeekdayInZone(nowTick, 'America/New_York')  && nowTick >= fx.nyFxOpen    && nowTick < fx.nyFxClose
+    const sydneyIsOpen = isWeekdayInZone(nowTick, 'Australia/Sydney')  && nowTick >= fx.sydneyOpen  && nowTick < fx.sydneyClose
+    const tokyoIsOpen  = isWeekdayInZone(nowTick, 'Asia/Tokyo')        && nowTick >= fx.tokyoOpen    && nowTick < fx.tokyoClose
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-8 px-6">
@@ -416,34 +421,58 @@ export default function DashboardPage() {
                 {/* Market hours (CDMX) */}
                 <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
                     <p className="text-sm font-semibold text-gray-700 dark:text-slate-200 mb-1">Horarios de mercado</p>
-                    <p className="text-xs text-gray-400 dark:text-slate-500 mb-4">Convertidos a hora de Ciudad de México (CDMX)</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className={`rounded-xl p-4 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 transition-shadow ${
-                            nyseIsOpen ? 'shadow-[0px_0px_10px_5px_rgba(250,204,21,0.65)]' : ''
+                    <p className="text-xs text-gray-400 dark:text-slate-500 mb-4">Convertidos a hora de Ciudad de México (CDMX) · se ajustan solos entre horario de verano e invierno de cada plaza</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className={`rounded-xl p-4 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 transition-shadow ${
+                            londonIsOpen ? 'shadow-[0px_0px_10px_5px_rgba(250,204,21,0.65)]' : ''
                         }`}>
-                            <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-500 dark:text-indigo-400 mb-1.5">
-                                Nueva York (NYSE)
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-blue-500 dark:text-blue-400 mb-1.5">
+                                Sesión Londres
                             </p>
                             <p className="text-lg font-black font-mono text-gray-800 dark:text-slate-100">
-                                {fmtCDMXTime(mh.nyseOpen)} – {fmtCDMXTime(mh.nyseClose)}
+                                {fmtCDMXTime(fx.londonOpen)} – {fmtCDMXTime(fx.londonClose)}
                             </p>
                             <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">
-                                9:30 a.m. – 4:00 p.m. hora del Este · se ajusta solo entre EDT/EST
+                                8:00 a.m. – 4:00 p.m. hora de Londres · se ajusta solo entre BST/GMT
                             </p>
                         </div>
-                        <div className={`rounded-xl p-4 bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900 transition-shadow ${
-                            chinaIsOpen ? 'shadow-[0_0_0_3px_rgba(250,204,21,0.65)]' : ''
+                        <div className={`rounded-xl p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900 transition-shadow ${
+                            nyFxIsOpen ? 'shadow-[0px_0px_10px_5px_rgba(250,204,21,0.65)]' : ''
                         }`}>
-                            <p className="text-[10px] font-semibold uppercase tracking-widest text-red-500 dark:text-red-400 mb-1.5">
-                                China (Shanghái / Shenzhen)
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-500 dark:text-emerald-400 mb-1.5">
+                                Sesión Nueva York
                             </p>
                             <p className="text-lg font-black font-mono text-gray-800 dark:text-slate-100">
-                                {fmtCDMXTime(mh.chinaAmOpen)} – {fmtCDMXTime(mh.chinaAmClose)}
-                                <span className="text-gray-300 dark:text-slate-600 mx-1.5">·</span>
-                                {fmtCDMXTime(mh.chinaPmOpen)} – {fmtCDMXTime(mh.chinaPmClose)}
+                                {fmtCDMXTime(fx.nyFxOpen)} – {fmtCDMXTime(fx.nyFxClose)}
                             </p>
                             <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">
-                                9:30–11:30 y 13:00–15:00 hora de China · por la diferencia horaria, cae en la noche anterior en CDMX
+                                8:00 a.m. – 5:00 p.m. hora del Este · se ajusta solo entre EDT/EST
+                            </p>
+                        </div>
+                        <div className={`rounded-xl p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-100 dark:border-amber-900 transition-shadow ${
+                            sydneyIsOpen ? 'shadow-[0px_0px_10px_5px_rgba(250,204,21,0.65)]' : ''
+                        }`}>
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-600 dark:text-amber-400 mb-1.5">
+                                Sesión Sídney
+                            </p>
+                            <p className="text-lg font-black font-mono text-gray-800 dark:text-slate-100">
+                                {fmtCDMXTime(fx.sydneyOpen)} – {fmtCDMXTime(fx.sydneyClose)}
+                            </p>
+                            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">
+                                8:00 a.m. – 5:00 p.m. hora de Sídney · se ajusta solo entre AEDT/AEST (opuesto al hemisferio norte)
+                            </p>
+                        </div>
+                        <div className={`rounded-xl p-4 bg-purple-50 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-900 transition-shadow ${
+                            tokyoIsOpen ? 'shadow-[0px_0px_10px_5px_rgba(250,204,21,0.65)]' : ''
+                        }`}>
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-purple-500 dark:text-purple-400 mb-1.5">
+                                Sesión Tokio
+                            </p>
+                            <p className="text-lg font-black font-mono text-gray-800 dark:text-slate-100">
+                                {fmtCDMXTime(fx.tokyoOpen)} – {fmtCDMXTime(fx.tokyoClose)}
+                            </p>
+                            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">
+                                9:00 a.m. – 6:00 p.m. hora de Tokio · Japón no observa horario de verano
                             </p>
                         </div>
                     </div>

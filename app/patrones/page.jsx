@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
-import { isApexTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT } from "../lib/autoTrade";
+import { isApexTarget, isApexDisplayTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled } from "../lib/autoTrade";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -1286,6 +1286,17 @@ export default function PatronesPage() {
         }
     };
 
+    // Switch para activar/desactivar la apertura automática — persistido en
+    // localStorage, por defecto activado. Se inicializa igual en servidor y
+    // cliente y se sobreescribe con el valor guardado tras montar.
+    const [autoTradeOn, setAutoTradeOnState] = useState(true);
+    useEffect(() => { setAutoTradeOnState(isAutoTradeEnabled()); }, []);
+    const toggleAutoTrade = () => {
+        const next = !autoTradeOn;
+        setAutoTradeOnState(next);
+        setAutoTradeEnabled(next);
+    };
+
     // Contador de generación: cada scan nuevo invalida al anterior de forma
     // permanente (a diferencia de un booleano compartido, no puede "revivir" si se resetea).
     const scanGenRef  = useRef(0);
@@ -1409,12 +1420,12 @@ export default function PatronesPage() {
                             notifiedRef.current.add(coin.id);
                             sendPatternNotification(coin, data, meta.label, bias);
 
-                            // Apertura automática: sólo para patrones con ápice a 8-10 días
-                            // Y con TP2 favorable (R:R ≥ 2, misma etiqueta "Favorable" de la
-                            // tarjeta). tryAutoOpenPosition verifica en vivo contra Bitunix que
-                            // no haya ya una operativa en ese símbolo y que no se exceda el
-                            // máximo de operativas concurrentes antes de operar.
-                            if (isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
+                            // Apertura automática: sólo si el switch está activado, para
+                            // patrones con ápice a 8-10 días y con TP2 favorable (R:R ≥ 2,
+                            // misma etiqueta "Favorable" de la tarjeta). tryAutoOpenPosition
+                            // verifica en vivo contra Bitunix que no haya ya una operativa en
+                            // ese símbolo y que no se exceda el máximo de operativas concurrentes.
+                            if (autoTradeOn && isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
                                 autoTradedRef.current.add(coin.id);
                                 await tryAutoOpenPosition({
                                     coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
@@ -1482,8 +1493,10 @@ export default function PatronesPage() {
             // Si la entrada ya está extendida (precio se alejó del punto de entrada),
             // no se muestra como señal confirmada.
             if (calcLevels(data)?.extended) return false;
-            // Sólo se muestran patrones cuyo ápice está a 8, 9 o 10 días.
-            return isApexTarget(data);
+            // Sólo se muestran patrones cuyo ápice está a 8, 9 o 10 días — la
+            // apertura automática, en cambio, solo dispara con ápice exacto de 10
+            // (ver isApexTarget en runScan).
+            return isApexDisplayTarget(data);
         })
         .sort((a, b) => {
             const ca = getEntryConditions(analysisCache[a.id].data).filter(c => c.ok).length;
@@ -1583,6 +1596,21 @@ export default function PatronesPage() {
                             />
                             <span className="text-gray-300 dark:text-slate-600">USDT</span>
                         </label>
+                        <button
+                            type="button"
+                            onClick={toggleAutoTrade}
+                            title="Activa/desactiva la apertura automática de posiciones"
+                            className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full border transition-colors ${
+                                autoTradeOn
+                                    ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800"
+                                    : "bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-500 border-gray-200 dark:border-slate-700"
+                            }`}
+                        >
+                            <span className={`relative inline-block w-8 h-4 rounded-full transition-colors ${autoTradeOn ? "bg-green-500" : "bg-gray-300 dark:bg-slate-600"}`}>
+                                <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${autoTradeOn ? "translate-x-4" : ""}`} />
+                            </span>
+                            Operativas automáticas: {autoTradeOn ? "ON" : "OFF"}
+                        </button>
                         <button
                             onClick={restartScan}
                             disabled={scanRunning}

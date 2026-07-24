@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
-import { isApexTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT } from "../lib/autoTrade";
+import { isApexTarget, isApexDisplayTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled } from "../lib/autoTrade";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -793,13 +793,12 @@ async function cancellableWait(ms, abortRef) {
 }
 
 // ─── OpenPositionModal ─────────────────────────────────────────────────────────
-// Opens a real LIMIT order on Bitunix Futures sized at BALANCE_PCT of available balance,
-// using the entry/SL/TP1 levels shown on the card. TP/SL are attached to the same
-// order as market-triggered exits (tpOrderType/slOrderType = MARKET) so no separate
-// tpsl order call is needed.
+// Opens a real LIMIT order on Bitunix Futures sized at the fixed "Monto/operación"
+// amount (ver app/lib/autoTrade.js), using the entry/SL/TP1 levels shown on the
+// card. TP/SL are attached to the same order as market-triggered exits
+// (tpOrderType/slOrderType = MARKET) so no separate tpsl order call is needed.
 const INITIAL_LEVERAGE = 2;    // Apalancamiento inicial para todas las posiciones abiertas desde esta pantalla
 const MAX_LEVERAGE     = 10;    // Tope al que se escala si Bitunix rechaza la orden
-const BALANCE_PCT      = 0.10; // Porcentaje del saldo disponible usado como capital de la posición
 
 function OpenPositionModal({ coin, result, levels, onClose }) {
     const [balance,  setBalance]  = useState(null);
@@ -841,16 +840,21 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
 
     useEffect(() => { fetchBalance(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const capital = balance != null ? balance * BALANCE_PCT : null;
-    const qty     = capital != null && levels.entry > 0 ? capital / levels.entry : null;
-    const qtyStr  = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
+    const capital = getTradeAmount(); // monto configurado = margen objetivo, no el nocional
+    const insufficientBalance = balance != null && capital > balance;
+    // El nocional (y por lo tanto qty) se calcula multiplicando el margen objetivo por
+    // el apalancamiento elegido, así margen = nocional ÷ apalancamiento = capital —
+    // en vez de capital ÷ apalancamiento, que dejaba el margen real muy por debajo
+    // del monto configurado.
+    const notional = capital * manualLeverage;
+    const qty      = levels.entry > 0 ? notional / levels.entry : null;
+    const qtyStr   = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
 
-    // El apalancamiento no cambia la cantidad de la posición (qty ya está fija por
-    // BALANCE_PCT del saldo) ni la ganancia/pérdida en dólares — solo reduce el margen
-    // que queda comprometido para esa misma posición. Por eso el % estimado sube junto
-    // con el apalancamiento elegido: es el retorno sobre el margen, no sobre el capital total.
+    // Como qty ahora escala con el apalancamiento para mantener el margen fijo en
+    // "capital", subir el apalancamiento agranda la posición (y por lo tanto la
+    // ganancia/pérdida en dólares) mientras el margen comprometido se mantiene igual.
     const dir      = isBull ? 1 : -1;
-    const margin   = capital != null ? capital / manualLeverage : null;
+    const margin   = capital;
     const pnlTp1   = qty != null ? qty * (levels.tp1 - levels.entry) * dir : null;
     const pnlSl    = qty != null ? qty * (levels.sl  - levels.entry) * dir : null;
     const roiTp1   = margin > 0 && pnlTp1 != null ? (pnlTp1 / margin) * 100 : null;
@@ -952,10 +956,12 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
 
                     {(status === "idle" || status === "sending") && balance != null && (
                         <>
-                            <div className="rounded-xl p-4 text-center mb-3 bg-indigo-500 dark:bg-indigo-600">
-                                <p className="text-[10px] font-semibold text-white/75 uppercase tracking-widest mb-1">Capital total a usar en esta operación</p>
+                            <div className={`rounded-xl p-4 text-center mb-3 ${insufficientBalance ? "bg-red-500 dark:bg-red-600" : "bg-indigo-500 dark:bg-indigo-600"}`}>
+                                <p className="text-[10px] font-semibold text-white/75 uppercase tracking-widest mb-1">Margen a usar en esta operación</p>
                                 <p className="text-2xl font-black text-white">${fmt(capital, 2)}</p>
-                                <p className="text-[10px] text-white/70 mt-0.5">{BALANCE_PCT * 100}% del saldo disponible</p>
+                                <p className="text-[10px] text-white/70 mt-0.5">
+                                    {insufficientBalance ? "⚠ excede el saldo disponible" : `Monto/operación configurado · nocional $${fmt(notional, 2)} @ ${manualLeverage}×`}
+                                </p>
                             </div>
                             <div className="grid grid-cols-2 gap-2 mb-4">
                                 <div className="bg-gray-50 dark:bg-slate-800 rounded-xl p-3 text-center">
@@ -1016,18 +1022,18 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                                 </div>
                             </div>
                             <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-2 -mt-2 italic">
-                                El apalancamiento no cambia la ganancia/pérdida en dólares, solo el margen comprometido — por eso el % sube junto con el apalancamiento.
+                                El margen se mantiene fijo en el monto/operación configurado — subir el apalancamiento agranda la posición (y la ganancia/pérdida en dólares) sin comprometer más margen.
                             </p>
                             <p className="text-sm text-gray-500 dark:text-slate-400 mb-2">
                                 Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{manualLeverage}×</span> y se enviará una orden{" "}
                                 <span className="font-bold text-gray-800 dark:text-slate-100">LIMIT {isBull ? "BUY" : "SELL"}</span> por{" "}
-                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(capital, 2)}) a ${fmt(levels.entry, dec)}, con TP/SL adjuntos a mercado.
+                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(notional, 2)} nocional, ${fmt(capital, 2)} margen) a ${fmt(levels.entry, dec)}, con TP/SL adjuntos a mercado.
                             </p>
                             <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-5 italic">
-                                La cantidad es una estimación ({BALANCE_PCT * 100}% del saldo ÷ precio de entrada). Si Bitunix rechaza la orden, se reintenta subiendo el
+                                La cantidad es una estimación (monto/operación × apalancamiento ÷ precio de entrada). Si Bitunix rechaza la orden, se reintenta subiendo el
                                 apalancamiento ({INITIAL_LEVERAGE}× → {MAX_LEVERAGE}× máx.) antes de reportar el error.
                             </p>
-                            <button onClick={handleConfirm} disabled={status === "sending" || !qtyStr}
+                            <button onClick={handleConfirm} disabled={status === "sending" || !qtyStr || insufficientBalance}
                                 className={`w-full font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 text-white disabled:opacity-60 ${
                                     isBull ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
                                 }`}>
@@ -1099,6 +1105,133 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
     );
 }
 
+// ─── PatternChartModal ─────────────────────────────────────────────────────────
+// Velas 1H con líneas de referencia para Entrada/TP1/SL — mismo estilo que el
+// gráfico de velas del modal TP/SL en app/bitunix/page.jsx.
+function PatternChartModal({ coin, levels, onClose }) {
+    const [candles, setCandles] = useState(null);
+    const [error,   setError]   = useState(null);
+    const sym        = coin.symbol.toUpperCase();
+    const symbolPair = `${sym}USDT`;
+
+    useEffect(() => {
+        const h = e => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    useEffect(() => {
+        fetch(`/api/binance/api/v3/klines?symbol=${symbolPair}&interval=1h&limit=30`)
+            .then(r => r.json())
+            .then(raw => {
+                if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
+                setCandles(raw.map(([, open, high, low, close]) => ({
+                    open:  parseFloat(open),
+                    high:  parseFloat(high),
+                    low:   parseFloat(low),
+                    close: parseFloat(close),
+                })));
+            })
+            .catch(err => setError(err.message));
+    }, [symbolPair]);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800">
+                    <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">{symbolPair} · Velas 1H</h2>
+                    <button onClick={onClose}
+                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+                <div className="px-6 py-5">
+                    {error ? (
+                        <p className="text-center text-red-400 dark:text-red-500 text-xs py-8">No se pudieron cargar las velas: {error}</p>
+                    ) : !candles ? (
+                        <div className="flex items-center justify-center py-16 text-gray-300 dark:text-slate-600 gap-2 text-sm">
+                            <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            Cargando velas…
+                        </div>
+                    ) : (
+                        <PatternCandleChart candles={candles} levels={levels} />
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function PatternCandleChart({ candles, levels }) {
+    const { entry, sl, tp1 } = levels;
+
+    const allPrices = [...candles.map(c => c.high), ...candles.map(c => c.low), entry, sl, tp1]
+        .filter(v => v != null && !isNaN(v));
+    const minP   = Math.min(...allPrices);
+    const maxP   = Math.max(...allPrices);
+    const spread = (maxP - minP) || minP * 0.01;
+    const pad    = spread * 0.1;
+    const lo     = minP - pad;
+    const hi     = maxP + pad;
+    const total  = hi - lo || 1;
+
+    const W = 620, H = 220, LEFT = 6, RIGHT = W - 84, TOP = 10, BOTTOM = H - 18;
+    const chartH = BOTTOM - TOP;
+    const slot   = (RIGHT - LEFT) / candles.length;
+    const bodyW  = Math.max(1.5, slot * 0.6);
+    const y = v => TOP + (1 - (v - lo) / total) * chartH;
+    const dec = entry < 1 ? 6 : entry < 10 ? 4 : 2;
+
+    const refLines = [
+        { key: "entry", value: entry, color: "#6366f1", label: "Entrada" },
+        { key: "tp1",   value: tp1,   color: "#22c55e", label: "TP1" },
+        { key: "sl",    value: sl,    color: "#ef4444", label: "SL" },
+    ].filter(r => r.value != null && !isNaN(r.value) && r.value > 0);
+
+    return (
+        <div>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+                {/* Velas */}
+                {candles.map((c, i) => {
+                    const x    = LEFT + i * slot + slot / 2;
+                    const up   = c.close >= c.open;
+                    const color = up ? "#22c55e" : "#ef4444";
+                    const top  = y(Math.max(c.open, c.close));
+                    const bot  = y(Math.min(c.open, c.close));
+                    return (
+                        <g key={i}>
+                            <line x1={x} y1={y(c.high)} x2={x} y2={y(c.low)} stroke={color} strokeWidth="1" />
+                            <rect x={x - bodyW / 2} y={top} width={bodyW} height={Math.max(1, bot - top)} fill={color} />
+                        </g>
+                    );
+                })}
+
+                {/* Líneas de referencia: Entrada / TP1 / SL */}
+                {refLines.map(r => (
+                    <g key={r.key}>
+                        <line x1={LEFT} y1={y(r.value)} x2={RIGHT} y2={y(r.value)}
+                              stroke={r.color} strokeWidth="1.3" strokeDasharray="4,3" />
+                        <text x={RIGHT + 4} y={y(r.value) - 2} fontSize="9" fontWeight="bold" fill={r.color}>
+                            {r.label}
+                        </text>
+                        <text x={RIGHT + 4} y={y(r.value) + 9} fontSize="9" fill={r.color}>
+                            ${fmt(r.value, dec)}
+                        </text>
+                    </g>
+                ))}
+            </svg>
+            <p className="text-center text-[10px] text-gray-400 dark:text-slate-500 mt-1">
+                Últimas {candles.length} velas de 1H
+            </p>
+        </div>
+    );
+}
+
 // ─── PatternCard ──────────────────────────────────────────────────────────────
 function PatternCard({ coin, result, updatedAt }) {
     const meta  = PATTERN_META[result.type] ?? {};
@@ -1131,6 +1264,7 @@ function PatternCard({ coin, result, updatedAt }) {
     const allMet = conds.every(c => c.ok);
     const lv     = calcLevels(result);
     const [showOpenModal, setShowOpenModal] = useState(false);
+    const [showChart, setShowChart] = useState(false);
 
     const borderCls = allMet
         ? "border-amber-400 dark:border-amber-500 ring-2 ring-amber-200 dark:ring-amber-900"
@@ -1353,7 +1487,7 @@ function PatternCard({ coin, result, updatedAt }) {
                 );
             })()}
 
-            {/* Abrir posición — LIMIT order sized at BALANCE_PCT of available balance */}
+            {/* Abrir posición — LIMIT order sized at the configured Monto/operación */}
             {lv && (
                 <button
                     type="button"
@@ -1363,6 +1497,17 @@ function PatternCard({ coin, result, updatedAt }) {
                     }`}
                 >
                     Abrir posición
+                </button>
+            )}
+
+            {/* Ver gráfico de velas con Entrada/TP1/SL */}
+            {lv && (
+                <button
+                    type="button"
+                    onClick={() => setShowChart(true)}
+                    className="w-full mb-3 text-xs font-bold py-2 rounded-xl transition-colors text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 hover:bg-indigo-100 dark:hover:bg-indigo-900"
+                >
+                    📊 Ver gráfico
                 </button>
             )}
 
@@ -1383,6 +1528,9 @@ function PatternCard({ coin, result, updatedAt }) {
             {showOpenModal && lv && (
                 <OpenPositionModal coin={coin} result={result} levels={lv} onClose={() => setShowOpenModal(false)} />
             )}
+            {showChart && lv && (
+                <PatternChartModal coin={coin} levels={lv} onClose={() => setShowChart(false)} />
+            )}
         </div>
     );
 }
@@ -1397,6 +1545,7 @@ function BreakoutCard({ coin, result, updatedAt }) {
                   : result.daysToApex !== null && result.daysToApex <= 10 ? "med" : "low";
     const lv      = calcLevels(result);
     const [showOpenModal, setShowOpenModal] = useState(false);
+    const [showChart, setShowChart] = useState(false);
 
     return (
         <div className={`relative rounded-2xl border-2 p-4 overflow-hidden ${
@@ -1537,7 +1686,7 @@ function BreakoutCard({ coin, result, updatedAt }) {
                 );
             })()}
 
-            {/* Abrir posición — LIMIT order sized at BALANCE_PCT of available balance */}
+            {/* Abrir posición — LIMIT order sized at the configured Monto/operación */}
             {lv && (
                 <button
                     type="button"
@@ -1562,10 +1711,19 @@ function BreakoutCard({ coin, result, updatedAt }) {
                    className="flex-1 text-center text-[10px] font-semibold py-1 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:bg-blue-100 transition-colors">
                     TradingView
                 </a>
+                {lv && (
+                    <button type="button" onClick={() => setShowChart(true)}
+                        className="flex-1 text-center text-[10px] font-semibold py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-colors">
+                        📊 Gráfico
+                    </button>
+                )}
             </div>
 
             {showOpenModal && lv && (
                 <OpenPositionModal coin={coin} result={result} levels={lv} onClose={() => setShowOpenModal(false)} />
+            )}
+            {showChart && lv && (
+                <PatternChartModal coin={coin} levels={lv} onClose={() => setShowChart(false)} />
             )}
         </div>
     );
@@ -1617,6 +1775,17 @@ export default function PatronesPage() {
         } else {
             setTradeAmountInput(String(tradeAmount)); // revierte a lo último válido
         }
+    };
+
+    // Switch para activar/desactivar la apertura automática — persistido en
+    // localStorage, por defecto activado. Se inicializa igual en servidor y
+    // cliente y se sobreescribe con el valor guardado tras montar.
+    const [autoTradeOn, setAutoTradeOnState] = useState(true);
+    useEffect(() => { setAutoTradeOnState(isAutoTradeEnabled()); }, []);
+    const toggleAutoTrade = () => {
+        const next = !autoTradeOn;
+        setAutoTradeOnState(next);
+        setAutoTradeEnabled(next);
     };
 
     // Contador de generación: cada scan nuevo invalida al anterior de forma
@@ -1742,12 +1911,12 @@ export default function PatronesPage() {
                             notifiedRef.current.add(coin.id);
                             sendPatternNotification(coin, data, meta.label, bias);
 
-                            // Apertura automática: sólo para patrones con ápice a 8-10 días
-                            // Y con TP2 favorable (R:R ≥ 2, misma etiqueta "Favorable" de la
-                            // tarjeta). tryAutoOpenPosition verifica en vivo contra Bitunix que
-                            // no haya ya una operativa en ese símbolo y que no se exceda el
-                            // máximo de operativas concurrentes antes de operar.
-                            if (isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
+                            // Apertura automática: sólo si el switch está activado, para
+                            // patrones con ápice a 8-10 días y con TP2 favorable (R:R ≥ 2,
+                            // misma etiqueta "Favorable" de la tarjeta). tryAutoOpenPosition
+                            // verifica en vivo contra Bitunix que no haya ya una operativa en
+                            // ese símbolo y que no se exceda el máximo de operativas concurrentes.
+                            if (autoTradeOn && isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
                                 autoTradedRef.current.add(coin.id);
                                 await tryAutoOpenPosition({
                                     coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
@@ -1815,8 +1984,10 @@ export default function PatronesPage() {
             // Si la entrada ya está extendida (precio se alejó del punto de entrada),
             // no se muestra como señal confirmada.
             if (calcLevels(data)?.extended) return false;
-            // Sólo se muestran patrones cuyo ápice está a 8, 9 o 10 días.
-            return isApexTarget(data);
+            // Sólo se muestran patrones cuyo ápice está a 8, 9 o 10 días — la
+            // apertura automática, en cambio, solo dispara con ápice exacto de 10
+            // (ver isApexTarget en runScan).
+            return isApexDisplayTarget(data);
         })
         .sort((a, b) => {
             const ca = getEntryConditions(analysisCache[a.id].data).filter(c => c.ok).length;
@@ -1916,6 +2087,21 @@ export default function PatronesPage() {
                             />
                             <span className="text-gray-300 dark:text-slate-600">USDT</span>
                         </label>
+                        <button
+                            type="button"
+                            onClick={toggleAutoTrade}
+                            title="Activa/desactiva la apertura automática de posiciones"
+                            className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full border transition-colors ${
+                                autoTradeOn
+                                    ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800"
+                                    : "bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-500 border-gray-200 dark:border-slate-700"
+                            }`}
+                        >
+                            <span className={`relative inline-block w-8 h-4 rounded-full transition-colors ${autoTradeOn ? "bg-green-500" : "bg-gray-300 dark:bg-slate-600"}`}>
+                                <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${autoTradeOn ? "translate-x-4" : ""}`} />
+                            </span>
+                            Operativas automáticas: {autoTradeOn ? "ON" : "OFF"}
+                        </button>
                         <button
                             onClick={restartScan}
                             disabled={scanRunning}

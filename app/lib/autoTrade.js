@@ -4,13 +4,15 @@
 // está abierta (no hay cron/servidor en este proyecto) — se invoca desde el
 // mismo runScan que ya dispara las notificaciones/correos de patrón.
 
-export const TARGET_APEX_DAYS      = [10];
+export const TARGET_APEX_DAYS      = [10]; // apertura automática — solo ápice exacto de 10 días
+export const DISPLAY_APEX_DAYS     = [5, 6, 7, 8, 9, 10]; // qué se muestra en los resultados de las páginas de patrones
 export const AUTO_INITIAL_LEVERAGE = 2;
 export const AUTO_MAX_LEVERAGE     = 10;
 export const MAX_CONCURRENT_TRADES = 5;
 export const DEFAULT_TRADE_AMOUNT_USDT = 20;
 
-const TRADE_AMOUNT_LS_KEY = 'trading_auto_trade_amount_usdt';
+const TRADE_AMOUNT_LS_KEY   = 'trading_auto_trade_amount_usdt';
+const AUTO_TRADE_ENABLED_LS_KEY = 'trading_auto_trade_enabled';
 
 // Monto fijo (en USDT) a usar en cada apertura automática. Persistido en
 // localStorage — se mantiene hasta que el usuario lo cambie manualmente desde
@@ -27,8 +29,29 @@ export function setTradeAmount(amount) {
     if (Number.isFinite(n) && n > 0) localStorage.setItem(TRADE_AMOUNT_LS_KEY, String(n));
 }
 
+// Switch para activar/desactivar la apertura automática de posiciones, sin
+// afectar el escaneo ni la lista de resultados mostrados. Persistido en
+// localStorage — por defecto activado (mismo comportamiento que antes de
+// existir este switch), hasta que el usuario lo apague manualmente.
+export function isAutoTradeEnabled() {
+    if (typeof window === 'undefined') return true;
+    const v = localStorage.getItem(AUTO_TRADE_ENABLED_LS_KEY);
+    return v === null ? true : v === 'true';
+}
+
+export function setAutoTradeEnabled(enabled) {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(AUTO_TRADE_ENABLED_LS_KEY, enabled ? 'true' : 'false');
+}
+
+// Usado para decidir la apertura automática — solo ápice de exactamente 10 días.
 export function isApexTarget(result) {
     return result?.daysToApex != null && TARGET_APEX_DAYS.includes(result.daysToApex);
+}
+
+// Usado para filtrar qué tarjetas se muestran en los resultados — ápice 8, 9 o 10.
+export function isApexDisplayTarget(result) {
+    return result?.daysToApex != null && DISPLAY_APEX_DAYS.includes(result.daysToApex);
 }
 
 // "TP2 favorable" — mismo umbral que la etiqueta "Favorable" mostrada en la tarjeta
@@ -142,14 +165,19 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
             return { opened: false, reason: 'max_concurrent' };
         }
 
-        const capital = getTradeAmount();
+        const capital = getTradeAmount(); // monto configurado = margen objetivo, no el nocional
+        console.log(`[AutoTrade] ${symbolPair}: monto/operación configurado = $${capital} (margen objetivo @ ${AUTO_INITIAL_LEVERAGE}×)`);
         const balance = await fetchAvailableBalance();
         if (capital > balance) {
             console.log(`[AutoTrade] ${symbolPair}: monto configurado ($${capital}) excede el saldo disponible ($${balance.toFixed(2)}), se omite.`);
             return { opened: false, reason: 'insufficient_balance' };
         }
 
-        const qty = levels.entry > 0 ? capital / levels.entry : 0;
+        // El monto configurado es el margen que se quiere comprometer — el nocional
+        // (y por lo tanto qty) se calcula multiplicando por el apalancamiento inicial,
+        // así margen = nocional ÷ apalancamiento = capital, en vez de capital ÷ apalancamiento.
+        const notional = capital * AUTO_INITIAL_LEVERAGE;
+        const qty = levels.entry > 0 ? notional / levels.entry : 0;
         if (!(qty > 0)) return { opened: false, reason: 'invalid_qty' };
         const qtyStr  = qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2);
 
