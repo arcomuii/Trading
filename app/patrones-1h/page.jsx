@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
-import { isApexTarget, isApexDisplayTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled } from "../lib/autoTrade";
+import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS } from "../lib/autoTrade";
+import { logBacktestEntry } from "../lib/backtestLog";
+import { CandlestickChart } from "../../components/CandlestickChart";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -8,6 +10,11 @@ import { isApexTarget, isApexDisplayTarget, isFavorableTp2, tryAutoOpenPosition,
 // con margen de sobra.
 const GAP_MS       = 1_500;
 const RETRY_DELAYS = [15_000, 30_000, 60_000];
+
+// lightweight-charts renderiza las marcas de tiempo como si fueran UTC. México
+// (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6,
+// así que restamos ese offset fijo para que el eje muestre hora de CDMX.
+const CDMX_OFFSET_SECONDS = 6 * 3600;
 
 // Re-escaneo automático cada 30 minutos, alineado al reloj (xx:00, xx:30) —
 // no a la hora en que se abrió la pestaña. Milisegundos hasta la próxima marca.
@@ -877,10 +884,8 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
             symbol:      symbolPair,
             side:        isBull ? "BUY" : "SELL",
             tradeSide:   "OPEN",
-            orderType:   "LIMIT",
-            price:       String(levels.entry),
+            orderType:   "MARKET",
             qty:         qtyStr,
-            effect:      "GTC",
             tpPrice:     String(levels.tp1),
             tpStopType:  "LAST_PRICE",
             tpOrderType: "MARKET",
@@ -1026,8 +1031,8 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                             </p>
                             <p className="text-sm text-gray-500 dark:text-slate-400 mb-2">
                                 Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{manualLeverage}×</span> y se enviará una orden{" "}
-                                <span className="font-bold text-gray-800 dark:text-slate-100">LIMIT {isBull ? "BUY" : "SELL"}</span> por{" "}
-                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(notional, 2)} nocional, ${fmt(capital, 2)} margen) a ${fmt(levels.entry, dec)}, con TP/SL adjuntos a mercado.
+                                <span className="font-bold text-gray-800 dark:text-slate-100">MARKET {isBull ? "BUY" : "SELL"}</span> por{" "}
+                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(notional, 2)} nocional, ${fmt(capital, 2)} margen) a precio de mercado, con TP/SL adjuntos a mercado.
                             </p>
                             <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-5 italic">
                                 La cantidad es una estimación (monto/operación × apalancamiento ÷ precio de entrada). Si Bitunix rechaza la orden, se reintenta subiendo el
@@ -1051,7 +1056,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                             </div>
                             <p className="font-bold text-gray-800 dark:text-slate-100 text-lg">Orden enviada</p>
                             <p className="text-gray-400 dark:text-slate-500 text-sm mt-1 mb-4">
-                                {qtyStr} {sym} @ ${fmt(levels.entry, dec)} · TP1 ${fmt(levels.tp1, dec)} · SL ${fmt(levels.sl, dec)} · {leverage}×
+                                {qtyStr} {sym} @ mercado · TP1 ${fmt(levels.tp1, dec)} · SL ${fmt(levels.sl, dec)} · {leverage}×
                             </p>
                             {leverage > INITIAL_LEVERAGE && (
                                 <p className="text-[10px] text-amber-500 dark:text-amber-400 -mt-3 mb-4">
@@ -1106,11 +1111,12 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
 }
 
 // ─── PatternChartModal ─────────────────────────────────────────────────────────
-// Velas 1H con líneas de referencia para Entrada/TP1/SL — mismo estilo que el
-// gráfico de velas del modal TP/SL en app/bitunix/page.jsx.
+// Velas 1H/4H (conmutable) con líneas de referencia para Entrada/TP1/SL —
+// mismo estilo que el gráfico de velas del modal TP/SL en app/bitunix/page.jsx.
 function PatternChartModal({ coin, levels, onClose }) {
-    const [candles, setCandles] = useState(null);
-    const [error,   setError]   = useState(null);
+    const [candles,        setCandles]        = useState(null);
+    const [error,          setError]          = useState(null);
+    const [chartInterval,  setChartInterval]  = useState('1h');
     const sym        = coin.symbol.toUpperCase();
     const symbolPair = `${sym}USDT`;
 
@@ -1121,11 +1127,14 @@ function PatternChartModal({ coin, levels, onClose }) {
     }, [onClose]);
 
     useEffect(() => {
-        fetch(`/api/binance/api/v3/klines?symbol=${symbolPair}&interval=1h&limit=30`)
+        setCandles(null);
+        setError(null);
+        fetch(`/api/binance/api/v3/klines?symbol=${symbolPair}&interval=${chartInterval}&limit=100`)
             .then(r => r.json())
             .then(raw => {
                 if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
-                setCandles(raw.map(([, open, high, low, close]) => ({
+                setCandles(raw.map(([openTime, open, high, low, close]) => ({
+                    time:  Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
                     open:  parseFloat(open),
                     high:  parseFloat(high),
                     low:   parseFloat(low),
@@ -1133,20 +1142,38 @@ function PatternChartModal({ coin, levels, onClose }) {
                 })));
             })
             .catch(err => setError(err.message));
-    }, [symbolPair]);
+    }, [symbolPair, chartInterval]);
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
             <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
                 <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800">
-                    <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">{symbolPair} · Velas 1H</h2>
-                    <button onClick={onClose}
-                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                    </button>
+                    <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">{symbolPair} · Velas {chartInterval.toUpperCase()}</h2>
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center bg-gray-100 dark:bg-slate-800 rounded-lg p-0.5">
+                            {['1h', '4h'].map(iv => (
+                                <button
+                                    key={iv}
+                                    type="button"
+                                    onClick={() => setChartInterval(iv)}
+                                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                                        chartInterval === iv
+                                            ? "bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 shadow-sm"
+                                            : "text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300"
+                                    }`}
+                                >
+                                    {iv.toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
+                        <button onClick={onClose}
+                            className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
                 <div className="px-6 py-5">
                     {error ? (
@@ -1159,75 +1186,18 @@ function PatternChartModal({ coin, levels, onClose }) {
                             Cargando velas…
                         </div>
                     ) : (
-                        <PatternCandleChart candles={candles} levels={levels} />
+                        <CandlestickChart
+                            data={candles}
+                            entry={levels.entry}
+                            sl={levels.sl}
+                            tp1={levels.tp1}
+                            emaPeriod={50}
+                            stochastic={{ period: 14, smoothK: 3, smoothD: 3 }}
+                            height={340}
+                        />
                     )}
                 </div>
             </div>
-        </div>
-    );
-}
-
-function PatternCandleChart({ candles, levels }) {
-    const { entry, sl, tp1 } = levels;
-
-    const allPrices = [...candles.map(c => c.high), ...candles.map(c => c.low), entry, sl, tp1]
-        .filter(v => v != null && !isNaN(v));
-    const minP   = Math.min(...allPrices);
-    const maxP   = Math.max(...allPrices);
-    const spread = (maxP - minP) || minP * 0.01;
-    const pad    = spread * 0.1;
-    const lo     = minP - pad;
-    const hi     = maxP + pad;
-    const total  = hi - lo || 1;
-
-    const W = 620, H = 220, LEFT = 6, RIGHT = W - 84, TOP = 10, BOTTOM = H - 18;
-    const chartH = BOTTOM - TOP;
-    const slot   = (RIGHT - LEFT) / candles.length;
-    const bodyW  = Math.max(1.5, slot * 0.6);
-    const y = v => TOP + (1 - (v - lo) / total) * chartH;
-    const dec = entry < 1 ? 6 : entry < 10 ? 4 : 2;
-
-    const refLines = [
-        { key: "entry", value: entry, color: "#6366f1", label: "Entrada" },
-        { key: "tp1",   value: tp1,   color: "#22c55e", label: "TP1" },
-        { key: "sl",    value: sl,    color: "#ef4444", label: "SL" },
-    ].filter(r => r.value != null && !isNaN(r.value) && r.value > 0);
-
-    return (
-        <div>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
-                {/* Velas */}
-                {candles.map((c, i) => {
-                    const x    = LEFT + i * slot + slot / 2;
-                    const up   = c.close >= c.open;
-                    const color = up ? "#22c55e" : "#ef4444";
-                    const top  = y(Math.max(c.open, c.close));
-                    const bot  = y(Math.min(c.open, c.close));
-                    return (
-                        <g key={i}>
-                            <line x1={x} y1={y(c.high)} x2={x} y2={y(c.low)} stroke={color} strokeWidth="1" />
-                            <rect x={x - bodyW / 2} y={top} width={bodyW} height={Math.max(1, bot - top)} fill={color} />
-                        </g>
-                    );
-                })}
-
-                {/* Líneas de referencia: Entrada / TP1 / SL */}
-                {refLines.map(r => (
-                    <g key={r.key}>
-                        <line x1={LEFT} y1={y(r.value)} x2={RIGHT} y2={y(r.value)}
-                              stroke={r.color} strokeWidth="1.3" strokeDasharray="4,3" />
-                        <text x={RIGHT + 4} y={y(r.value) - 2} fontSize="9" fontWeight="bold" fill={r.color}>
-                            {r.label}
-                        </text>
-                        <text x={RIGHT + 4} y={y(r.value) + 9} fontSize="9" fill={r.color}>
-                            ${fmt(r.value, dec)}
-                        </text>
-                    </g>
-                ))}
-            </svg>
-            <p className="text-center text-[10px] text-gray-400 dark:text-slate-500 mt-1">
-                Últimas {candles.length} velas de 1H
-            </p>
         </div>
     );
 }
@@ -1788,6 +1758,27 @@ export default function PatronesPage() {
         setAutoTradeEnabled(next);
     };
 
+    // Días de ápice (1-10) que activan la apertura automática — persistido en
+    // localStorage vía app/lib/autoTrade.js, se mantiene hasta que se cambie manualmente.
+    const [apexDays,      setApexDaysState] = useState(DEFAULT_AUTO_TRADE_APEX_DAYS);
+    const [apexDaysInput, setApexDaysInput] = useState(String(DEFAULT_AUTO_TRADE_APEX_DAYS));
+    useEffect(() => {
+        const stored = getAutoTradeApexDays();
+        setApexDaysState(stored);
+        setApexDaysInput(String(stored));
+    }, []);
+
+    const commitApexDays = () => {
+        const n = parseInt(apexDaysInput, 10);
+        if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS) {
+            setAutoTradeApexDays(n);
+            setApexDaysState(n);
+            setApexDaysInput(String(n));
+        } else {
+            setApexDaysInput(String(apexDays)); // revierte a lo último válido
+        }
+    };
+
     // Contador de generación: cada scan nuevo invalida al anterior de forma
     // permanente (a diferencia de un booleano compartido, no puede "revivir" si se resetea).
     const scanGenRef  = useRef(0);
@@ -1873,6 +1864,12 @@ export default function PatronesPage() {
         return () => { cancelled = true; };
     }, [bitunixSymbols]);
 
+    // Cobertura Bitunix vs Binance: ¿tenemos precio en vivo de Binance para este ticker?
+    // El scan solo corre sobre foundCoins — los símbolos sin match en Binance no
+    // tienen velas que analizar, así que escanearlos solo desperdicia tiempo/rate-limit.
+    const foundCoins    = coins.filter(c => c.current_price != null);
+    const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
+
     // Scan inicia solo con el botón "Actualizar ahora"
 
     // Cleanup: invalida cualquier scan en vuelo al desmontar
@@ -1922,6 +1919,12 @@ export default function PatronesPage() {
                                     coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
                                 });
                             }
+
+                            // Log de backtesting: ápice 8-10 días + TP2 favorable (R:R >= 2),
+                            // independiente de si el auto-trade real está activado o no.
+                            if (isBacktestApexTarget(data) && levels && isFavorableTp2(levels)) {
+                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label });
+                            }
                         }
                     }
                 }
@@ -1939,23 +1942,30 @@ export default function PatronesPage() {
             setCurrentCoin(null);
             setLastScan(new Date());
             setScanRunning(false);
+
+            // Reinicia el escaneo apenas termina, sin esperar la siguiente marca
+            // de :00/:30 — usa las refs (siempre actualizadas) para no arrastrar
+            // closures viejas de una corrida que pudo haber tardado varios minutos.
+            if (coinsRef.current.length > 0) {
+                setTimeout(() => runScanRef.current?.(coinsRef.current), 150);
+            }
         }
     };
 
     const restartScan = () => {
         scanGenRef.current++; // invalida de inmediato cualquier scan en curso
-        setTimeout(() => { if (coins.length > 0) runScan(coins); }, 150);
+        setTimeout(() => { if (foundCoins.length > 0) runScan(foundCoins); }, 150);
     };
 
     // Refs siempre actualizados — evitan que el efecto de scheduling tenga que
-    // depender de runScan/coins/scanRunning (que cambian cada render) y se reprograme
-    // de más; el timeout de larga duración se programa una sola vez.
+    // depender de runScan/foundCoins/scanRunning (que cambian cada render) y se
+    // reprograme de más; el timeout de larga duración se programa una sola vez.
     const runScanRef     = useRef(null);
     const coinsRef        = useRef([]);
     const scanRunningRef  = useRef(false);
     useEffect(() => {
         runScanRef.current    = runScan;
-        coinsRef.current       = coins;
+        coinsRef.current       = foundCoins;
         scanRunningRef.current = scanRunning;
     });
 
@@ -2025,10 +2035,6 @@ export default function PatronesPage() {
         ? Math.ceil((progress.total - progress.done) * GAP_MS / 60_000) : 0;
     const initialLoad = bitunixSymbols === null || loadingCoins;
 
-    // Cobertura Bitunix vs Binance: ¿tenemos precio en vivo de Binance para este ticker?
-    const foundCoins    = coins.filter(c => c.current_price != null);
-    const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
-
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-6">
             <div className="max-w-6xl mx-auto">
@@ -2067,8 +2073,8 @@ export default function PatronesPage() {
                             </span>
                         )}
                         {!scanRunning && (
-                            <span className="text-xs text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2.5 py-1 rounded-full" title="Scan automático cada 30 minutos, alineado a :00 y :30">
-                                ⏰ Próximo auto-scan: {new Date(Date.now() + msUntilNextHalfHour()).toLocaleTimeString("es-MX", { hour: '2-digit', minute: '2-digit' })}
+                            <span className="text-xs text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2.5 py-1 rounded-full" title="El escaneo se reinicia automáticamente en cuanto termina">
+                                🔁 Reinicio automático al terminar
                             </span>
                         )}
                         <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"
@@ -2086,6 +2092,22 @@ export default function PatronesPage() {
                                 className="w-16 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
                             />
                             <span className="text-gray-300 dark:text-slate-600">USDT</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"
+                               title="Días de ápice (1-10) que activan la apertura automática — se guarda hasta que lo cambies">
+                            <span className="text-gray-400 dark:text-slate-500 font-semibold">Ápice auto-trade</span>
+                            <input
+                                type="number"
+                                min={MIN_AUTO_TRADE_APEX_DAYS}
+                                max={MAX_AUTO_TRADE_APEX_DAYS}
+                                step="1"
+                                value={apexDaysInput}
+                                onChange={e => setApexDaysInput(e.target.value)}
+                                onBlur={commitApexDays}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="w-10 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
+                            />
+                            <span className="text-gray-300 dark:text-slate-600">días</span>
                         </label>
                         <button
                             type="button"

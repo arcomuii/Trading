@@ -4,15 +4,19 @@
 // está abierta (no hay cron/servidor en este proyecto) — se invoca desde el
 // mismo runScan que ya dispara las notificaciones/correos de patrón.
 
-export const TARGET_APEX_DAYS      = [10]; // apertura automática — solo ápice exacto de 10 días
-export const DISPLAY_APEX_DAYS     = [5, 6, 7, 8, 9, 10]; // qué se muestra en los resultados de las páginas de patrones
+export const DISPLAY_APEX_DAYS     = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // qué se muestra en los resultados de las páginas de patrones
+export const BACKTEST_APEX_DAYS    = [10]; // registro en el log de backtesting
 export const AUTO_INITIAL_LEVERAGE = 2;
 export const AUTO_MAX_LEVERAGE     = 10;
 export const MAX_CONCURRENT_TRADES = 5;
 export const DEFAULT_TRADE_AMOUNT_USDT = 20;
+export const DEFAULT_AUTO_TRADE_APEX_DAYS = 10; // mismo valor que el TARGET_APEX_DAYS fijo anterior
+export const MIN_AUTO_TRADE_APEX_DAYS = 1;
+export const MAX_AUTO_TRADE_APEX_DAYS = 20;
 
 const TRADE_AMOUNT_LS_KEY   = 'trading_auto_trade_amount_usdt';
 const AUTO_TRADE_ENABLED_LS_KEY = 'trading_auto_trade_enabled';
+const AUTO_TRADE_APEX_DAYS_LS_KEY = 'trading_auto_trade_apex_days';
 
 // Monto fijo (en USDT) a usar en cada apertura automática. Persistido en
 // localStorage — se mantiene hasta que el usuario lo cambie manualmente desde
@@ -44,14 +48,36 @@ export function setAutoTradeEnabled(enabled) {
     localStorage.setItem(AUTO_TRADE_ENABLED_LS_KEY, enabled ? 'true' : 'false');
 }
 
-// Usado para decidir la apertura automática — solo ápice de exactamente 10 días.
+// Días de ápice (1-10) que activan la apertura automática. Persistido en
+// localStorage — se mantiene hasta que el usuario lo cambie manualmente desde
+// el campo de texto en patrones/page.jsx o patrones-1h/page.jsx.
+export function getAutoTradeApexDays() {
+    if (typeof window === 'undefined') return DEFAULT_AUTO_TRADE_APEX_DAYS;
+    const n = parseInt(localStorage.getItem(AUTO_TRADE_APEX_DAYS_LS_KEY), 10);
+    return Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS
+        ? n : DEFAULT_AUTO_TRADE_APEX_DAYS;
+}
+
+export function setAutoTradeApexDays(days) {
+    if (typeof window === 'undefined') return;
+    const n = parseInt(days, 10);
+    if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS)
+        localStorage.setItem(AUTO_TRADE_APEX_DAYS_LS_KEY, String(n));
+}
+
+// Usado para decidir la apertura automática — ápice configurable (ver getAutoTradeApexDays).
 export function isApexTarget(result) {
-    return result?.daysToApex != null && TARGET_APEX_DAYS.includes(result.daysToApex);
+    return result?.daysToApex != null && result.daysToApex === getAutoTradeApexDays();
 }
 
 // Usado para filtrar qué tarjetas se muestran en los resultados — ápice 8, 9 o 10.
 export function isApexDisplayTarget(result) {
     return result?.daysToApex != null && DISPLAY_APEX_DAYS.includes(result.daysToApex);
+}
+
+// Usado para decidir si un patrón se registra en el log de backtesting — ápice 8, 9 o 10.
+export function isBacktestApexTarget(result) {
+    return result?.daysToApex != null && BACKTEST_APEX_DAYS.includes(result.daysToApex);
 }
 
 // "TP2 favorable" — mismo umbral que la etiqueta "Favorable" mostrada en la tarjeta

@@ -1,9 +1,18 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Sidebar } from './Sidebar'
+import { startBacktestMonitor } from '../app/lib/backtestLog'
 
 export function AppShell({ children }) {
   const [open, setOpen] = useState(true)
+
+  // Monitor de precio del log de backtesting: revisa cada 60s las operativas
+  // "en_proceso" para detectar cierre por TP1/SL. Corre mientras el navegador
+  // esté abierto en cualquier página (no hay cron/servidor en este proyecto).
+  useEffect(() => {
+    const stop = startBacktestMonitor()
+    return stop
+  }, [])
 
   return (
     <div className="flex min-h-screen bg-gray-50 dark:bg-slate-950">

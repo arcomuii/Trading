@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
-import { isApexTarget, isApexDisplayTarget, isFavorableTp2, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled } from "../lib/autoTrade";
+import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS } from "../lib/autoTrade";
+import { logBacktestEntry } from "../lib/backtestLog";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -1297,6 +1298,27 @@ export default function PatronesPage() {
         setAutoTradeEnabled(next);
     };
 
+    // Días de ápice (1-10) que activan la apertura automática — persistido en
+    // localStorage vía app/lib/autoTrade.js, se mantiene hasta que se cambie manualmente.
+    const [apexDays,      setApexDaysState] = useState(DEFAULT_AUTO_TRADE_APEX_DAYS);
+    const [apexDaysInput, setApexDaysInput] = useState(String(DEFAULT_AUTO_TRADE_APEX_DAYS));
+    useEffect(() => {
+        const stored = getAutoTradeApexDays();
+        setApexDaysState(stored);
+        setApexDaysInput(String(stored));
+    }, []);
+
+    const commitApexDays = () => {
+        const n = parseInt(apexDaysInput, 10);
+        if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS) {
+            setAutoTradeApexDays(n);
+            setApexDaysState(n);
+            setApexDaysInput(String(n));
+        } else {
+            setApexDaysInput(String(apexDays)); // revierte a lo último válido
+        }
+    };
+
     // Contador de generación: cada scan nuevo invalida al anterior de forma
     // permanente (a diferencia de un booleano compartido, no puede "revivir" si se resetea).
     const scanGenRef  = useRef(0);
@@ -1430,6 +1452,12 @@ export default function PatronesPage() {
                                 await tryAutoOpenPosition({
                                     coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
                                 });
+                            }
+
+                            // Log de backtesting: ápice 8-10 días + TP2 favorable (R:R >= 2),
+                            // independiente de si el auto-trade real está activado o no.
+                            if (isBacktestApexTarget(data) && levels && isFavorableTp2(levels)) {
+                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label });
                             }
                         }
                     }
@@ -1595,6 +1623,22 @@ export default function PatronesPage() {
                                 className="w-16 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
                             />
                             <span className="text-gray-300 dark:text-slate-600">USDT</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"
+                               title="Días de ápice (1-10) que activan la apertura automática — se guarda hasta que lo cambies">
+                            <span className="text-gray-400 dark:text-slate-500 font-semibold">Ápice auto-trade</span>
+                            <input
+                                type="number"
+                                min={MIN_AUTO_TRADE_APEX_DAYS}
+                                max={MAX_AUTO_TRADE_APEX_DAYS}
+                                step="1"
+                                value={apexDaysInput}
+                                onChange={e => setApexDaysInput(e.target.value)}
+                                onBlur={commitApexDays}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="w-10 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
+                            />
+                            <span className="text-gray-300 dark:text-slate-600">días</span>
                         </label>
                         <button
                             type="button"

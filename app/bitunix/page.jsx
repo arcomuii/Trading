@@ -1,5 +1,11 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { CandlestickChart } from "../../components/CandlestickChart";
+
+// lightweight-charts renderiza las marcas de tiempo como si fueran UTC. México
+// (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6,
+// así que restamos ese offset fijo para que el eje muestre hora de CDMX.
+const CDMX_OFFSET_SECONDS = 6 * 3600;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -47,12 +53,13 @@ function fmtDate(ts) {
 }
 
 // ─── CandleChart ──────────────────────────────────────────────────────────────
-// Mini gráfico de velas 4H (Binance) con líneas de referencia para Entrada/TP/SL
-// superpuestas, para ver de un vistazo si el precio se está acercando al
-// take-profit o al stop-loss — reemplaza el gauge horizontal anterior.
+// Gráfico de velas (Binance), conmutable 1H/4H, con líneas de referencia para
+// Entrada/TP/SL superpuestas, para ver de un vistazo si el precio se está
+// acercando al take-profit o al stop-loss — reemplaza el gauge horizontal anterior.
 function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
-    const [candles, setCandles] = useState(null);
-    const [error,   setError]   = useState(null);
+    const [candles,       setCandles]       = useState(null);
+    const [error,         setError]         = useState(null);
+    const [chartInterval, setChartInterval] = useState("4h");
 
     useEffect(() => {
         if (!symbol) return;
@@ -60,11 +67,12 @@ function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
         const fetchCandles = (isFirst) => {
             if (isFirst) setCandles(null);
             setError(null);
-            fetch(`/api/binance/api/v3/klines?symbol=${symbol}&interval=4h&limit=30`)
+            fetch(`/api/binance/api/v3/klines?symbol=${symbol}&interval=${chartInterval}&limit=100`)
                 .then(r => r.json())
                 .then(raw => {
                     if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
-                    setCandles(raw.map(([, open, high, low, close]) => ({
+                    setCandles(raw.map(([openTime, open, high, low, close]) => ({
+                        time:  Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
                         open:  parseFloat(open),
                         high:  parseFloat(high),
                         low:   parseFloat(low),
@@ -77,7 +85,7 @@ function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
         fetchCandles(true);
         const id = setInterval(() => fetchCandles(false), 60_000);
         return () => clearInterval(id);
-    }, [symbol]);
+    }, [symbol, chartInterval]);
 
     const entryNum = parseFloat(entry);
     const tpNum    = parseFloat(tp);
@@ -87,86 +95,71 @@ function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
     const distSl = curNum && slNum ? (curNum - slNum) / curNum * 100 : null;
     const distTp = curNum && tpNum ? (tpNum - curNum) / curNum * 100 : null;
 
+    const intervalToggle = (
+        <div className="flex justify-end mb-2">
+            <div className="flex items-center bg-gray-100 dark:bg-slate-800 rounded-lg p-0.5">
+                {['1h', '4h'].map(iv => (
+                    <button
+                        key={iv}
+                        type="button"
+                        onClick={() => setChartInterval(iv)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                            chartInterval === iv
+                                ? "bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 shadow-sm"
+                                : "text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300"
+                        }`}
+                    >
+                        {iv.toUpperCase()}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+
     if (error) {
-        return <p className="text-center text-red-400 dark:text-red-500 text-xs py-4">No se pudieron cargar las velas: {error}</p>;
+        return (
+            <div>
+                {intervalToggle}
+                <p className="text-center text-red-400 dark:text-red-500 text-xs py-4">No se pudieron cargar las velas: {error}</p>
+            </div>
+        );
     }
     if (!candles) {
         return (
-            <div className="flex items-center justify-center py-10 text-gray-300 dark:text-slate-600 gap-2 text-sm">
-                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-                Cargando velas 4H…
+            <div>
+                {intervalToggle}
+                <div className="flex items-center justify-center py-10 text-gray-300 dark:text-slate-600 gap-2 text-sm">
+                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                    Cargando velas {chartInterval.toUpperCase()}…
+                </div>
             </div>
         );
     }
     if (candles.length === 0) {
-        return <p className="text-center text-gray-400 dark:text-slate-500 text-sm py-4">Sin datos de velas para {symbol}</p>;
+        return (
+            <div>
+                {intervalToggle}
+                <p className="text-center text-gray-400 dark:text-slate-500 text-sm py-4">Sin datos de velas para {symbol}</p>
+            </div>
+        );
     }
-
-    const refPrices = [entryNum, tpNum, slNum, curNum].filter(v => !isNaN(v) && v > 0);
-    const allPrices = [...candles.map(c => c.high), ...candles.map(c => c.low), ...refPrices];
-    const minP   = Math.min(...allPrices);
-    const maxP   = Math.max(...allPrices);
-    const spread = (maxP - minP) || minP * 0.01;
-    const pad    = spread * 0.1;
-    const lo     = minP - pad;
-    const hi     = maxP + pad;
-    const total  = hi - lo || 1;
-
-    const W = 460, H = 170, LEFT = 6, RIGHT = W - 56, TOP = 10, BOTTOM = H - 18;
-    const chartH = BOTTOM - TOP;
-    const slot   = (RIGHT - LEFT) / candles.length;
-    const bodyW  = Math.max(1.5, slot * 0.6);
-    const y = v => TOP + (1 - (v - lo) / total) * chartH;
-
-    const refLines = [
-        { key: "entry", value: entryNum, color: "#6366f1", label: "Entrada" },
-        { key: "tp",    value: tpNum,    color: "#22c55e", label: "TP" },
-        { key: "sl",    value: slNum,    color: "#ef4444", label: "SL" },
-    ].filter(r => !isNaN(r.value) && r.value > 0);
 
     return (
         <div>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
-                {/* Velas */}
-                {candles.map((c, i) => {
-                    const x    = LEFT + i * slot + slot / 2;
-                    const up   = c.close >= c.open;
-                    const color = up ? "#22c55e" : "#ef4444";
-                    const top  = y(Math.max(c.open, c.close));
-                    const bot  = y(Math.min(c.open, c.close));
-                    return (
-                        <g key={i}>
-                            <line x1={x} y1={y(c.high)} x2={x} y2={y(c.low)} stroke={color} strokeWidth="1" />
-                            <rect x={x - bodyW / 2} y={top} width={bodyW} height={Math.max(1, bot - top)} fill={color} />
-                        </g>
-                    );
-                })}
-
-                {/* Líneas de referencia: Entrada / TP / SL */}
-                {refLines.map(r => (
-                    <g key={r.key}>
-                        <line x1={LEFT} y1={y(r.value)} x2={RIGHT} y2={y(r.value)}
-                              stroke={r.color} strokeWidth="1.3" strokeDasharray="4,3" />
-                        <text x={RIGHT + 4} y={y(r.value) + 3} fontSize="9" fontWeight="bold" fill={r.color}>
-                            {r.label}
-                        </text>
-                    </g>
-                ))}
-
-                {/* Precio actual */}
-                {!isNaN(curNum) && curNum > 0 && (
-                    <>
-                        <circle cx={RIGHT} cy={y(curNum)} r="3.5" fill="#1e293b" stroke="white" strokeWidth="1.5" />
-                        <text x={RIGHT - 6} y={y(curNum) - 6} textAnchor="end" fontSize="9" fontWeight="bold" fill="#64748b">
-                            ${fmt(curNum, 8)}
-                        </text>
-                    </>
-                )}
-            </svg>
+            {intervalToggle}
+            <CandlestickChart
+                data={candles}
+                entry={!isNaN(entryNum) && entryNum > 0 ? entryNum : null}
+                sl={!isNaN(slNum) && slNum > 0 ? slNum : null}
+                tp1={!isNaN(tpNum) && tpNum > 0 ? tpNum : null}
+                emaPeriod={50}
+                stochastic={{ period: 14, smoothK: 3, smoothD: 3 }}
+                height={340}
+            />
             <p className="text-center text-[10px] text-gray-400 dark:text-slate-500 mt-1">
-                Últimas {candles.length} velas de 4H · {symbol}
+                Últimas {candles.length} velas de {chartInterval.toUpperCase()} · {symbol} · EMA 50 · Estocástico 14,3,3
             </p>
 
             {/* Distance stats */}
