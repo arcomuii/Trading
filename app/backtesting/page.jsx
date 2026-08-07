@@ -17,8 +17,9 @@ const CANDLE_INTERVALS = [
     { value: '5m', label: '5m' },
     { value: '1h', label: '1h' },
     { value: '4h', label: '4h' },
+    { value: '1d', label: '1d' },
 ]
-const INTERVAL_MS = { '5m': 5 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000 }
+const INTERVAL_MS = { '5m': 5 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000, '1d': 24 * 60 * 60_000 }
 
 // lightweight-charts renderiza las marcas de tiempo como si fueran UTC. México
 // (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6,
@@ -204,6 +205,11 @@ function BacktestCard({ record }) {
                     {record.patternLabel && (
                         <span className="text-xs text-gray-400 dark:text-slate-500">{record.patternLabel}</span>
                     )}
+                    <a href={`https://www.bitunix.com/es-es/contract-trade/${record.activo}`}
+                       target="_blank" rel="noopener noreferrer"
+                       className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900 transition-colors">
+                        Ver en Bitunix
+                    </a>
                 </div>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${meta.classes}`}>{meta.label}</span>
             </div>
@@ -215,6 +221,7 @@ function BacktestCard({ record }) {
                 <div><div className="text-gray-400 dark:text-slate-500">Último precio</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmt(record.ultimoPrecio)}</div></div>
                 <div><div className="text-gray-400 dark:text-slate-500">Apertura</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmtTime(record.horaApertura)}</div></div>
                 <div><div className="text-gray-400 dark:text-slate-500">Cierre</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmtTime(record.horaCierre)}</div></div>
+                <div><div className="text-gray-400 dark:text-slate-500">Capital usado</div><div className="font-medium text-gray-700 dark:text-slate-200">{PNL_NOTIONAL_USDT.toFixed(2)} USDT</div></div>
                 <div>
                     <div className="text-gray-400 dark:text-slate-500">{isClosed ? 'P&L estimado' : 'P&L no realizado'}</div>
                     <div className={`font-medium ${pnl == null ? 'text-gray-400 dark:text-slate-500' : pnl.usdt >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
