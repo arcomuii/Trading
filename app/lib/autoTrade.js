@@ -8,7 +8,6 @@ export const DISPLAY_APEX_DAYS     = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // qué
 export const BACKTEST_APEX_DAYS    = [10]; // registro en el log de backtesting
 export const AUTO_INITIAL_LEVERAGE = 2;
 export const AUTO_MAX_LEVERAGE     = 10;
-export const MAX_CONCURRENT_TRADES = 5;
 export const DEFAULT_TRADE_AMOUNT_USDT = 20;
 export const DEFAULT_AUTO_TRADE_APEX_DAYS = 10; // mismo valor que el TARGET_APEX_DAYS fijo anterior
 export const MIN_AUTO_TRADE_APEX_DAYS = 1;
@@ -108,11 +107,11 @@ async function fetchAvailableBalance() {
     return parseFloat(acct.available);
 }
 
-// Ajusta el apalancamiento y coloca una orden LIMIT con TP1/SL adjuntos a mercado.
-// Si Bitunix rechaza la orden, reintenta subiendo el apalancamiento hasta
-// AUTO_MAX_LEVERAGE antes de rendirse — mismo comportamiento que el flujo manual
-// de "Abrir posición" en patrones-1h/page.jsx.
-async function placeAutoOrder({ symbolPair, isBull, entry, sl, tp1, qtyStr }) {
+// Ajusta el apalancamiento y coloca una orden MARKET con TP1/SL adjuntos a
+// mercado. Si Bitunix rechaza la orden, reintenta subiendo el apalancamiento
+// hasta AUTO_MAX_LEVERAGE antes de rendirse — mismo comportamiento que el
+// flujo manual de "Abrir posición" en patrones-1h/page.jsx (también a mercado).
+async function placeAutoOrder({ symbolPair, isBull, sl, tp1, qtyStr }) {
     const attempt = async (lev) => {
         const levRes = await fetch("/api/bitunix/api/v1/futures/account/change_leverage", {
             method:  "POST",
@@ -127,10 +126,8 @@ async function placeAutoOrder({ symbolPair, isBull, entry, sl, tp1, qtyStr }) {
             symbol:      symbolPair,
             side:        isBull ? "BUY" : "SELL",
             tradeSide:   "OPEN",
-            orderType:   "LIMIT",
-            price:       String(entry),
+            orderType:   "MARKET",
             qty:         qtyStr,
-            effect:      "GTC",
             tpPrice:     String(tp1),
             tpStopType:  "LAST_PRICE",
             tpOrderType: "MARKET",
@@ -172,7 +169,7 @@ async function sendTradeOpenedEmail(payload) {
 
 // Intenta abrir automáticamente una posición para un patrón cuyo ápice está a
 // 8-10 días. Antes de operar verifica EN VIVO contra Bitunix que no haya ya una
-// posición abierta en ese símbolo y que no se exceda MAX_CONCURRENT_TRADES.
+// posición abierta en ese símbolo (sin límite de operativas concurrentes).
 // Sólo envía correo si la orden se coloca con éxito.
 export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }) {
     const sym        = coin.symbol.toUpperCase();
@@ -185,10 +182,6 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
         if (openSymbols.has(symbolPair)) {
             console.log(`[AutoTrade] ${symbolPair}: ya hay una operativa abierta, se omite.`);
             return { opened: false, reason: 'already_open' };
-        }
-        if (openSymbols.size >= MAX_CONCURRENT_TRADES) {
-            console.log(`[AutoTrade] ${symbolPair}: ya hay ${openSymbols.size} operativas concurrentes, se omite.`);
-            return { opened: false, reason: 'max_concurrent' };
         }
 
         const capital = getTradeAmount(); // monto configurado = margen objetivo, no el nocional
@@ -208,7 +201,7 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
         const qtyStr  = qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2);
 
         const order = await placeAutoOrder({
-            symbolPair, isBull, entry: levels.entry, sl: levels.sl, tp1: levels.tp1, qtyStr,
+            symbolPair, isBull, sl: levels.sl, tp1: levels.tp1, qtyStr,
         });
 
         if (!order.ok) {

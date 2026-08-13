@@ -1431,7 +1431,7 @@ export default function PatronesPage() {
                 if (!stale()) {
                     setAnalysisCache(prev => ({ ...prev, [coin.id]: { loading: false, data, updatedAt: new Date() } }));
 
-                    if (data && !notifiedRef.current.has(coin.id)) {
+                    if (data) {
                         const meta     = PATTERN_META[data.type] ?? {};
                         const bias     = meta.bias ?? 'neutral';
                         const conds    = getEntryConditions(data);
@@ -1439,14 +1439,28 @@ export default function PatronesPage() {
                         const levels   = calcLevels(data);
 
                         if (condsMet === conds.length && !levels?.extended) {
-                            notifiedRef.current.add(coin.id);
-                            sendPatternNotification(coin, data, meta.label, bias);
+                            // La notificación se dedupea por su cuenta (notifiedRef) — pero
+                            // el auto-trade y el log de backtest se evalúan en CADA escaneo
+                            // que el checklist esté completo, sin importar si ya se había
+                            // notificado antes por otro valor de ápice. daysToApex se
+                            // recalcula cada escaneo (regresión sobre las últimas velas) y no
+                            // baja de forma perfectamente monótona: si se anidaba todo bajo
+                            // "!notifiedRef.has(coin)", una moneda que ya notificó una vez con
+                            // ápice≠10 nunca volvía a evaluarse cuando el ápice llegaba recién
+                            // ahí al valor exacto configurado — el auto-trade se quedaba sin
+                            // disparar en silencio, sin ningún log de error.
+                            if (!notifiedRef.current.has(coin.id)) {
+                                notifiedRef.current.add(coin.id);
+                                sendPatternNotification(coin, data, meta.label, bias);
+                            }
 
                             // Apertura automática: sólo si el switch está activado, para
-                            // patrones con ápice a 8-10 días y con TP2 favorable (R:R ≥ 2,
-                            // misma etiqueta "Favorable" de la tarjeta). tryAutoOpenPosition
-                            // verifica en vivo contra Bitunix que no haya ya una operativa en
-                            // ese símbolo y que no se exceda el máximo de operativas concurrentes.
+                            // patrones con ápice EXACTAMENTE en el valor configurado
+                            // (getAutoTradeApexDays(), default 10 días) y con TP2 favorable
+                            // (R:R ≥ 2, misma etiqueta "Favorable" de la tarjeta).
+                            // tryAutoOpenPosition verifica en vivo contra Bitunix que no haya
+                            // ya una operativa abierta en ese símbolo (sin límite de operativas
+                            // concurrentes).
                             if (autoTradeOn && isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
                                 autoTradedRef.current.add(coin.id);
                                 await tryAutoOpenPosition({
