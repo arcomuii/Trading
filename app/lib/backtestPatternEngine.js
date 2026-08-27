@@ -9,10 +9,23 @@
 // lógica de detección/validación en patrones-1h, hay que replicar el cambio
 // aquí a mano para que el backtest siga siendo representativo.
 //
-// Incluye también, sin cambios de comportamiento, la rareza conocida de
-// daysToApex: la conversión "/6" asume velas de 4H (24h/4h=6) pero este motor
-// corre sobre velas de 1H — se deja igual a propósito para que "ápice a 10
-// días" signifique exactamente lo mismo que en la página en vivo.
+// Este motor corría originalmente sobre velas de 1H (después, brevemente, sobre
+// 5 minutos); ahora corre sobre velas de 4H (ver app/lib/binanceHistory.js).
+// Todas las ventanas expresadas en NÚMERO DE VELAS (CONSOL, POLE, lookback de
+// sweep, recSlice, CUP_LEN, HANDLE_LEN, PRIOR_LEN, WINDOW) se escalan respecto
+// a la línea base original de 1H — ÷4 en vez de ×12, porque cada vela de 4H
+// cubre 4× más tiempo que una de 1H en vez de 12× menos — para seguir
+// cubriendo el mismo lapso real de tiempo que antes. Donde la división no da
+// un número entero de velas (recSlice, CUP_LEN) se redondea.
+//
+// Sin cambios, y ya sin sentido literal como "días": la conversión "/6" de
+// daysToApex asumía velas de 4H (24h/4h=6) aunque el motor ya corría sobre 1H
+// — se deja igual a propósito (igual que siempre) para que el filtro "ápice a
+// 10 días" del backtest siga siendo el MISMO valor numérico que usa el gate
+// en vivo de patrones-1h, aunque ninguno de los dos represente literalmente
+// días. Los umbrales de pendiente FLAT/SLOPE tampoco se reescalaron: son
+// porcentajes de movimiento por vela calibrados a ojo sobre velas de 1H: con
+// velas de 5 minutos casi seguro requieren re-calibración empírica aparte.
 
 // ─── Linear Regression ────────────────────────────────────────────────────────
 function linReg(values) {
@@ -32,7 +45,7 @@ function linReg(values) {
 }
 
 // ─── Liquidity Sweep Detection ─────────────────────────────────────────────────
-function detectLiquiditySweep(candles, lookback = 8, wickMargin = 0.0015) {
+function detectLiquiditySweep(candles, lookback = 8 / 4, wickMargin = 0.0015) {
     let sweptLow = false, sweptHigh = false;
     for (let i = 1; i < candles.length - 1; i++) {
         const c = candles[i];
@@ -53,7 +66,7 @@ function detectLiquiditySweep(candles, lookback = 8, wickMargin = 0.0015) {
 
 // ─── Pattern Detection (idéntico a patrones-1h/page.jsx) ──────────────────────
 function detectPattern(candles) {
-    const CONSOL = 60, POLE = 20;
+    const CONSOL = 60 / 4, POLE = 20 / 4; // ÷4: antes 60/20 velas de 1H
     if (candles.length < CONSOL + POLE) return null;
 
     const consolSlice = candles.slice(-CONSOL);
@@ -114,7 +127,7 @@ function detectPattern(candles) {
         ? Math.round(bandEnd / candleConvergence / 6)
         : null;
 
-    const recSlice      = consolSlice.slice(-5);
+    const recSlice      = consolSlice.slice(-Math.max(1, Math.round(5 / 4))); // 5/4=1.25 → 1 vela
     const recCloses     = recSlice.map(c => c.close);
     const recLows       = recSlice.map(c => c.low);
     const recHighs      = recSlice.map(c => c.high);
@@ -162,9 +175,9 @@ function detectPattern(candles) {
 
 // ─── Cup and Handle Detection (idéntico a patrones-1h/page.jsx) ───────────────
 function detectCupHandle(candles) {
-    const CUP_LEN    = 90;
-    const HANDLE_LEN = 20;
-    const PRIOR_LEN  = 20;
+    const CUP_LEN    = Math.round(90 / 4); // ÷4: antes 90/20/20 velas de 1H (90/4=22.5 → 23)
+    const HANDLE_LEN = 20 / 4;
+    const PRIOR_LEN  = 20 / 4;
     if (candles.length < CUP_LEN + HANDLE_LEN + PRIOR_LEN) return null;
 
     const priorSlice  = candles.slice(-(CUP_LEN + HANDLE_LEN + PRIOR_LEN), -(CUP_LEN + HANDLE_LEN));
@@ -212,7 +225,7 @@ function detectCupHandle(candles) {
     if (handleDepth > cupHeight * 0.45)       return null;
     if (handleLow < cupBottom)                return null;
 
-    const recSlice      = handleSlice.slice(-5);
+    const recSlice      = handleSlice.slice(-Math.max(1, Math.round(5 / 4))); // 5/4=1.25 → 1 vela
     const recCloses     = recSlice.map(c => c.close);
     const recLows       = recSlice.map(c => c.low);
     const aboveResCount = recCloses.filter(c => c > rightRim * 1.003).length;
@@ -344,10 +357,11 @@ export function calcLevels(result) {
 }
 
 // Réplica pura de `fetchPatterns` de patrones-1h/page.jsx (sin el fetch — recibe
-// las velas ya descargadas). `candles` = últimas ventanas de hasta 200 velas 1H
-// terminando en el punto que se quiere evaluar, con forma {high, low, close}.
+// las velas ya descargadas). `candles` = últimas ventanas de hasta WINDOW velas
+// de 4H (antes 200 velas 1H) terminando en el punto que se quiere evaluar,
+// con forma {high, low, close}.
 export function evaluateWindow(candles) {
-    if (!Array.isArray(candles) || candles.length < 80) return null;
+    if (!Array.isArray(candles) || candles.length < 80 / 4) return null;
     return detectCupHandle(candles) ?? detectPattern(candles);
 }
 
@@ -360,18 +374,28 @@ export function passesAllConditions(result, levels) {
     return allOk && !levels.extended;
 }
 
-// Mismos umbrales que app/lib/autoTrade.js (BACKTEST_APEX_DAYS, isFavorableTp2)
-// — se reproducen aquí en vez de importarlos porque autoTrade.js trae consigo
-// funciones de auto-trade real (fetch a Bitunix) que no aplican al backtest.
-const BACKTEST_APEX_DAYS_TARGET = 10;
+// BACKTEST_APEX_DAYS_TARGET replicaba, sin cambios, el mismo umbral que
+// app/lib/autoTrade.js (BACKTEST_APEX_DAYS) mientras este motor corrió sobre
+// velas de 1H — ahí sí tenía sentido copiarlo literal. Ahora que este motor
+// corre sobre velas de 4H (y el divisor "/6" de daysToApex, antes un desajuste
+// deliberado que asumía 4H sobre datos de 1H, pasó a ser matemáticamente
+// correcto — ver comentario de daysToApex), el valor "10" ya no es alcanzable:
+// con CONSOL/POLE escalados ÷4, daysToApex nunca supera ~6 en la práctica
+// (verificado con datos reales de Binance — BTC/ETH/SOL/DOGE/ADA a 4H nunca
+// superan 6). Se recalibra a 10/4=2.5→2, el valor que en esa misma prueba dio
+// más señales con RR≥2 en los 5 símbolos (25 vs 12 con target=3). Si en el
+// futuro autoTrade.js cambia BACKTEST_APEX_DAYS, este valor YA NO debe copiarse
+// literal — hay que re-derivarlo con el mismo criterio (real-days-target/4).
+const BACKTEST_APEX_DAYS_TARGET = 2;
 const MIN_FAVORABLE_RR = 2;
 
-const WINDOW = 200; // igual al `limit=200` que usa fetchPatterns en vivo
+const WINDOW = 200 / 4; // ÷4: antes 200 velas de 1H, igual lapso real con velas de 4H
 
-// Recorre el historial de un símbolo (velas 1H ascendentes por tiempo) igual
-// que lo haría el scanner en vivo cada hora: ventana deslizante de las últimas
-// 200 velas, mismo gate de "todas las condiciones" + ápice exactamente en 10
-// días + TP2 favorable (R:R ≥ 2) — el mismo gate que dispara logBacktestEntry/
+// Recorre el historial de un símbolo (velas de 4H ascendentes por
+// tiempo) igual que lo haría el scanner en vivo cada hora: ventana deslizante
+// que cubre el mismo lapso real que antes (las últimas 200 velas de 1H),
+// mismo gate de "todas las condiciones" + ápice exactamente en 10 días + TP2
+// favorable (R:R ≥ 2) — el mismo gate que dispara logBacktestEntry/
 // tryAutoOpenPosition en patrones-1h/page.jsx.
 //
 // Simplificaciones deliberadas frente al mundo real:
@@ -381,7 +405,7 @@ const WINDOW = 200; // igual al `limit=200` que usa fetchPatterns en vivo
 //   inmediato (cruza el spread) — no se modela slippage.
 // - Si una misma vela toca SL y TP1 a la vez, se cuenta como pérdida (empate
 //   a favor del escenario conservador, no se puede saber cuál tocó primero
-//   con datos OHLC de 1H).
+//   con datos OHLC de 4H).
 // - Mientras una operativa está "abierta" en el backtest, no se buscan nuevas
 //   señales en ese símbolo (igual que tryAutoOpenPosition, que no abre una
 //   segunda posición si ya hay una activa en el mismo símbolo).

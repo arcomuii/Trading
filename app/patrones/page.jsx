@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS } from "../lib/autoTrade";
 import { logBacktestEntry } from "../lib/backtestLog";
+import { CandlestickChart } from "../../components/CandlestickChart";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
@@ -10,90 +11,30 @@ import { logBacktestEntry } from "../lib/backtestLog";
 const GAP_MS       = 1_500;
 const RETRY_DELAYS = [15_000, 30_000, 60_000];
 
-// México (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6.
-// Horarios de escaneo automático en hora de México: 06:00, 10:00, 14:00, 18:00, 22:00, 02:00.
-// Convertidos a UTC (+6h): 12, 16, 20, 0, 4, 8.
-const MEXICO_SCAN_UTC_HOURS = [12, 16, 20, 0, 4, 8];
+// lightweight-charts renderiza las marcas de tiempo como si fueran UTC. México
+// (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6,
+// así que restamos ese offset fijo para que el eje muestre hora de CDMX.
+const CDMX_OFFSET_SECONDS = 6 * 3600;
 
-// Contratos disponibles en Bitunix Futures (snapshot estático en vez de fetch en vivo)
-const BITUNIX_TICKERS = [
-    "BNB", "XLM", "XMR", "CC", "LINK", "LAB", "HBAR", "AVAX", "SUI", "XAUT",
-    "TAO", "PAXG", "ASTER", "OKB", "WLD", "ONDO", "MNT", "AAVE", "ICP", "MORPHO",
-    "ETC", "DEXE", "QNT", "STABLE", "ATOM", "RENDER", "ALGO", "BEAT", "KAS", "JST",
-    "ENA", "VELVET", "VVV", "APT", "INJ", "AERO", "CAKE", "LIT", "DASH", "JTO",
-    "FET", "VET", "PENGU", "VIRTUAL", "TIA", "XRP", "GWEI", "SUN", "GRASS", "ETHFI",
-    "STX", "SPX", "PYTH", "BSV", "XPL", "FRAX", "ZBCN", "MON", "2Z", "PIEVERSE",
-    "JASMY", "UB", "PENDLE", "LDO", "ZRO", "STRK", "GRT", "FF", "DOGE", "CHZ",
-    "WIF", "AXS", "EIGEN", "RAY", "ENS", "SYRUP", "IOTA", "COMP", "TWT", "KAITO",
-    "SKYAI", "NEO", "DYDX", "THETA", "MANA", "BAT", "SAND", "BAS", "AR", "GALA",
-    "BILL", "SFP", "TAC", "TAG", "AWE", "IMX", "CVX", "ZK", "A", "KMNO",
-    "GLM", "1INCH", "SENT", "RE", "MET", "ATH", "BANANAS31", "ZEC", "FORM", "MAGMA",
-    "RAVE", "SYN", "LPT", "WAL", "SNX", "EGLD", "ARKM", "GAS", "QTUM", "RSR",
-    "USELESS", "ORCA", "RIVER", "HOME", "RIF", "MELANIA", "ALLO", "Q", "ZRX", "FLUID",
-    "ORDI", "ZAMA", "RVN", "SIREN", "SAFE", "BIO", "SOON", "NMR", "PLUME", "IO",
-    "YFI", "ALCH", "ICNT", "BERA", "ENJ", "ZIL", "JELLYJELLY", "KSM", "GMX", "HOT",
-    "LINEA", "CYS", "ZETA", "BRETT", "SPK", "COAI", "APR", "MINA", "AXL", "POLYX",
-    "IDOL", "ROSE", "DUSK", "0G", "KAVA", "CKB", "BARD", "FLOW", "POPCAT", "ASTR",
-    "ZEREBRO", "XVS", "ESP", "BLUR", "BR", "CELO", "SUSHI", "DEEP", "RED", "MANTA",
-    "GPS", "MOODENG", "TRB", "TRIA", "HUMA", "AZTEC", "SAHARA", "ROBO", "NOT", "KGEN",
-    "PROVE", "XVG", "SQD", "VTHO", "CROSS", "NXPC", "MMT", "MOCA", "ANKR", "MANTRA",
-    "FOGO", "ZEST", "UMA", "VANA", "FOLKS", "AT", "ZORA", "MEW", "TRUTH", "LTC",
-    "RPL", "API3", "USTC", "POWR", "ACX", "AVNT", "SSV", "IRYS", "BOME", "HIVE",
-    "OCEAN", "ICX", "BNT", "CATI", "NOW", "WAVES", "SKR", "REZ", "BAND", "PEOPLE",
-    "ZBT", "OPG", "GIGGLE", "ACU", "COTI", "EUL", "IOST", "NAORIS", "EDU", "MERL",
-    "ETHW", "XAN", "AUCTION", "GMT", "NEAR", "ILV", "STG", "CYBER", "STEEM", "ONG",
-    "CARV", "FIDA", "PUNDIX", "B2", "MTL", "SKL", "ARK", "RLC", "XPIN", "BNX",
-    "CTSI", "LSK", "PROM", "SIGN", "LISTA", "AIXBT", "AGIX", "KNC", "WAXP", "EWT",
-    "BREV", "BCH", "SAPIEN", "LQTY", "YGG", "AEVO", "CTK", "SXT", "MYX", "USUAL",
-    "CGPT", "CVC", "SPELL", "SLP", "LUMIA", "BLUAI", "NIL", "SOMI", "TRX", "CTR",
-    "PIPPIN", "MAGIC", "CETUS", "INX", "YB", "AGLD", "MOVR", "ERA", "WET", "BLESS",
-    "CHR", "BIGTIME", "LAYER", "BICO", "FLOCK", "AIOT", "TA", "HEI", "DOT", "ZKC",
-    "TAIKO", "XNY", "C98", "DIA", "ENSO", "LA", "OG", "XAI", "BLEND", "DOLO",
-    "PARTI", "TNSR", "KERNEL", "HMSTR", "DOOD", "ON", "FIL", "STORJ", "GUN", "RAD",
-    "CELR", "PORTAL", "NEWT", "STO", "MUBARAK", "OGN", "RARE", "GRIFFAIN", "ELSA", "DRIFT",
-    "TRUST", "MAV", "CHILLGUY", "DYM", "MITO", "AKE", "TUT", "4", "RESOLV", "RECALL",
-    "WCT", "MAVIA", "ARPA", "LYN", "ASR", "HFT", "COOKIE", "GAL", "SWARMS", "VANRY",
-    "TRADOOR", "ANTHROPIC", "TLM", "V", "GTC", "SHELL", "SAGA", "AVA", "AIA", "VIC",
-    "BTR", "TAKE", "ESPORTS", "FHE", "XEM", "EVAA", "HEMI", "MU", "SOLV", "EPIC",
-    "KOMA", "MLN", "TOWNS", "NFP", "BLZ", "ALPINE", "REN", "HAEDAL", "XPT", "COIN",
-    "OPN", "ACT", "OPENAI", "ZKP", "MASK", "SNDK", "FRONT", "XTZ", "PTB", "IOTX",
-    "PRL", "PUMP", "ONT", "DRAM", "KAT", "KITE", "BAN", "T", "PI", "ACE",
-    "CORE", "ID", "FARTCOIN", "UP", "SLX", "UNFI", "PHB", "BABY", "SPACE", "EDEN",
-    "JUP", "DIS", "BMT", "FIGHT", "SOPH", "BOND", "COST", "JOE", "HD", "M",
-    "APEX", "DOGS", "KEY", "S", "ARIA", "TURTLE", "BASED", "ADA", "LOOM", "SPCX",
-    "TURBO", "TST", "AIN", "COS", "XAU", "POL", "MEGA", "UAI", "SONIC", "SOL",
-    "CLO", "HANA", "BTW", "PNUT", "NIGHT", "GUA", "GOAT", "BROCCOLI", "GENIUS", "STMX",
-    "SUPER", "OP", "ZEN", "TREE", "ORCL", "BSB", "TOSHI", "IN", "NOM", "ME",
-    "COMBO", "XPD", "LIGHT", "POWER", "G", "PIXEL", "HOLO", "PROMPT", "BTC", "H",
-    "RUNE", "THE", "TEST", "F", "COW", "COPPER", "CFX", "B", "ANIME", "W",
-    "TON", "OPEN", "MEME", "KAIA", "CLANKER", "C", "SKY", "MSTR", "US", "BANK",
-    "ORBS", "BB", "ARB", "WLFI", "WOO", "TSLA", "DAR", "CHIP", "1000BONK", "ALT",
-    "USAR", "AMD", "INTC", "ZM", "CRCL", "TRUMP", "1000SATS", "SEI", "O", "ARX",
-    "HYPER", "ETH", "AAOI", "CBRS", "METIS", "BIRB", "NBIS", "CRO", "ACH", "HIGH",
-    "STBL", "ALICE", "SMCI", "PLTR", "LITE", "BANANA", "QCOM", "NFLX", "NVDA", "AIO",
-    "MRVL", "CRM", "CRWD", "GOOGL", "MSFT", "CRWV", "SPY", "AMZN", "1000CAT", "BABA",
-    "ASTS", "KLAY", "FLNC", "APE", "AMAT", "HYPE", "AAPL", "GLW", "CRV", "META",
-    "ORDER", "LLY", "COLLECT", "IREN", "EWY", "1MBABYDOGE", "1000SHIB", "RIVN", "MATIC", "JCT",
-    "UNI", "1000RATS", "USO", "INIT", "AVGO", "CFG", "MOVE", "RKLB", "DOG", "BE",
-    "ONE", "QQQ", "ASML", "MIRA", "DELL", "SCR", "1000CHEEMS", "TSM", "FTM",
-];
-
-// Milisegundos hasta el próximo horario de escaneo (06/10/14/18/22/02h México), calculado
-// en UTC para no depender de la zona horaria del navegador del usuario.
-function msUntilNextMexicoScan() {
-    const now = new Date();
-    let next = null;
-    for (const h of MEXICO_SCAN_UTC_HOURS) {
-        for (const dayOffset of [0, 1]) {
-            const candidate = new Date(Date.UTC(
-                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + dayOffset,
-                h, 0, 0, 0
-            ));
-            if (candidate > now && (next === null || candidate < next)) next = candidate;
-        }
-    }
+// Re-escaneo automático cada 30 minutos, alineado al reloj (xx:00, xx:30) —
+// no a la hora en que se abrió la pestaña. Milisegundos hasta la próxima marca.
+function msUntilNextHalfHour() {
+    const now  = new Date();
+    const next = new Date(now);
+    next.setSeconds(0, 0);
+    if (now.getMinutes() < 30) next.setMinutes(30);
+    else { next.setMinutes(0); next.setHours(now.getHours() + 1); }
     return next - now;
 }
+
+// Contratos disponibles en Bitunix Futures (snapshot estático en vez de fetch en vivo)
+// Exportado (además de usarse local) para que app/backtest-historico/page.jsx
+// pueda ofrecer el mismo universo de símbolos sin duplicar la lista.
+export const BITUNIX_TICKERS = [
+    //"BNB", "XLM", "XMR", "CC", "LINK", "LAB", "HBAR", "AVAX", "SUI", "XAUT", "TAO", "PAXG", "ASTER", "OKB", "WLD", "ONDO", "MNT", "AAVE", "ICP", "MORPHO", "ETC", "DEXE", "QNT", "STABLE", "ATOM", "RENDER", "ALGO", "BEAT", "KAS", "JST", "ENA", "VELVET", "VVV", "APT", "INJ", "AERO", "CAKE", "LIT", "DASH", "JTO", "FET", "VET", "PENGU", "VIRTUAL", "TIA", "XRP", "GWEI", "SUN", "GRASS", "ETHFI", "STX", "SPX", "PYTH", "BSV", "XPL", "FRAX", "ZBCN", "MON", "2Z", "PIEVERSE", "JASMY", "UB", "PENDLE", "LDO", "ZRO", "STRK", "GRT", "FF", "DOGE", "CHZ", "WIF", "AXS", "EIGEN", "RAY", "ENS", "SYRUP", "IOTA", "COMP", "TWT", "KAITO", "SKYAI", "NEO", "DYDX", "THETA", "MANA", "BAT", "SAND", "BAS", "AR", "GALA", "BILL", "SFP", "TAC", "TAG", "AWE", "IMX", "CVX", "ZK", "A", "KMNO", "GLM", "1INCH", "SENT", "RE", "MET", "ATH", "BANANAS31", "ZEC", "FORM", "MAGMA", "RAVE", "SYN", "LPT", "WAL", "SNX", "EGLD", "ARKM", "GAS", "QTUM", "RSR", "USELESS", "ORCA", "RIVER", "HOME", "RIF", "MELANIA", "ALLO", "Q", "ZRX", "FLUID", "ORDI", "ZAMA", "RVN", "SIREN", "SAFE", "BIO", "SOON", "NMR", "PLUME", "IO", "YFI", "ALCH", "ICNT", "BERA", "ENJ", "ZIL", "JELLYJELLY", "KSM", "GMX", "HOT", "LINEA", "CYS", "ZETA", "BRETT", "SPK", "COAI", "APR", "MINA", "AXL", "POLYX", "IDOL", "ROSE", "DUSK", "0G", "KAVA", "CKB", "BARD", "FLOW", "POPCAT", "ASTR", "ZEREBRO", "XVS", "ESP", "BLUR", "BR", "CELO", "SUSHI", "DEEP", "RED", "MANTA", "GPS", "MOODENG", "TRB", "TRIA", "HUMA", "AZTEC", "SAHARA", "ROBO", "NOT", "KGEN", "PROVE", "XVG", "SQD", "VTHO", "CROSS", "NXPC", "MMT", "MOCA", "ANKR", "MANTRA", "FOGO", "ZEST", "UMA", "VANA", "FOLKS", "AT", "ZORA", "MEW", "TRUTH", "LTC", "RPL", "API3", "USTC", "POWR", "ACX", "AVNT", "SSV", "IRYS", "BOME", "HIVE", "OCEAN", "ICX", "BNT", "CATI", "NOW", "WAVES", "SKR", "REZ", "BAND", "PEOPLE", "ZBT", "OPG", "GIGGLE", "ACU", "COTI", "EUL", "IOST", "NAORIS", "EDU", "MERL", "ETHW", "XAN", "AUCTION", "GMT", "NEAR", "ILV", "STG", "CYBER", "STEEM", "ONG", "CARV", "FIDA", "PUNDIX", "B2", "MTL", "SKL", "ARK", "RLC", "XPIN", "BNX", "CTSI", "LSK", "PROM", "SIGN", "LISTA", "AIXBT", "AGIX", "KNC", "WAXP", "EWT", "BREV", "BCH", "SAPIEN", "LQTY", "YGG", "AEVO", "CTK", "SXT", "MYX", "USUAL", "CGPT", "CVC", "SPELL", "SLP", "LUMIA", "BLUAI", "NIL", "SOMI", "TRX", "CTR", "PIPPIN", "MAGIC", "CETUS", "INX", "YB", "AGLD", "MOVR", "ERA", "WET", "BLESS", "CHR", "BIGTIME", "LAYER", "BICO", "FLOCK", "AIOT", "TA", "HEI", "DOT", "ZKC", "TAIKO", "XNY", "C98", "DIA", "ENSO", "LA", "OG", "XAI", "BLEND", "DOLO", "PARTI", "TNSR", "KERNEL", "HMSTR", "DOOD", "ON", "FIL", "STORJ", "GUN", "RAD", "CELR", "PORTAL", "NEWT", "STO", "MUBARAK", "OGN", "RARE", "GRIFFAIN", "ELSA", "DRIFT", "TRUST", "MAV", "CHILLGUY", "DYM", "MITO", "AKE", "TUT", "4", "RESOLV", "RECALL", "WCT", "MAVIA", "ARPA", "LYN", "ASR", "HFT", "COOKIE", "GAL", "SWARMS", "VANRY", "TRADOOR", "ANTHROPIC", "TLM", "V", "GTC", "SHELL", "SAGA", "AVA", "AIA", "VIC", "BTR", "TAKE", "ESPORTS", "FHE", "XEM", "EVAA", "HEMI", "MU", "SOLV", "EPIC", "KOMA", "MLN", "TOWNS", "NFP", "BLZ", "ALPINE", "REN", "HAEDAL", "XPT", "COIN", "OPN", "ACT", "OPENAI", "ZKP", "MASK", "SNDK", "FRONT", "XTZ", "PTB", "IOTX", "PRL", "PUMP", "ONT", "DRAM", "KAT", "KITE", "BAN", "T", "PI", "ACE", "CORE", "ID", "FARTCOIN", "UP", "SLX", "UNFI", "PHB", "BABY", "SPACE", "EDEN", "JUP", "DIS", "BMT", "FIGHT", "SOPH", "BOND", "COST", "JOE", "HD", "M", "APEX", "DOGS", "KEY", "S", "ARIA", "TURTLE", "BASED", "ADA", "LOOM", "SPCX", "TURBO", "TST", "AIN", "COS", "XAU", "POL", "MEGA", "UAI", "SONIC", "SOL", "CLO", "HANA", "BTW", "PNUT", "NIGHT", "GUA", "GOAT", "BROCCOLI", "GENIUS", "STMX", "SUPER", "OP", "ZEN", "TREE", "ORCL", "BSB", "TOSHI", "IN", "NOM", "ME", "COMBO", "XPD", "LIGHT", "POWER", "G", "PIXEL", "HOLO", "PROMPT", "BTC", "H", "RUNE", "THE", "TEST", "F", "COW", "COPPER", "CFX", "B", "ANIME", "W", "TON", "OPEN", "MEME", "KAIA", "CLANKER", "C", "SKY", "MSTR", "US", "BANK", "ORBS", "BB", "ARB", "WLFI", "WOO", "TSLA", "DAR", "CHIP", "1000BONK", "ALT", "USAR", "AMD", "INTC", "ZM", "CRCL", "TRUMP", "1000SATS", "SEI", "O", "ARX", "HYPER", "ETH", "AAOI", "CBRS", "METIS", "BIRB", "NBIS", "CRO", "ACH", "HIGH", "STBL", "ALICE", "SMCI", "PLTR", "LITE", "BANANA", "QCOM", "NFLX", "NVDA", "AIO", "MRVL", "CRM", "CRWD", "GOOGL", "MSFT", "CRWV", "SPY", "AMZN", "1000CAT", "BABA", "ASTS", "KLAY", "FLNC", "APE", "AMAT", "HYPE", "AAPL", "GLW", "CRV", "META", "ORDER", "LLY", "COLLECT", "IREN", "EWY", "1MBABYDOGE", "1000SHIB", "RIVN", "MATIC", "JCT", "UNI", "1000RATS", "USO", "INIT", "AVGO", "CFG", "MOVE", "RKLB", "DOG", "BE", "ONE", "QQQ", "ASML", "MIRA", "DELL", "SCR", "1000CHEEMS", "TSM", "FTM",
+    'CELO', 'XMR', 'MORPHO', 'IO', 'REZ', 'CELR', 'POL', 'BERA', 'EUL', 'DOLO', 'SCR', 'WAL', 'ZAMA', 'SPK', '0G', 'MANTA', 'GPS', 'MANTRA', 'VANA', 'ACX', 'WAVES', 'GIGGLE', 'AGIX', 'AEVO', 'CGPT', 'ERA', 'TUT', 'HEMI', 'EDEN', 'TREE', 'G', 'HOLO', 'SKY', 'TRUMP', 'WOO', 'OCEAN', 'COS', 'HBAR', 'SUI', 'DASH', 'KSM', 'BARD', 'RAD', 'AR', 'ZEN', 'MUBARAK', 'ANIME', 'SEI', 'JST', 'LQTY', 'ALICE', 'API3', 'BNB', 'KAVA', 'BLUR', 'TRB', 'SSV', 'CYBER', 'KAITO', 'SFP', 'MET', 'SYN', 'ORCA', 'ORDI', 'ZBT', 'STEEM', 'USUAL', 'STO', 'KEY', 'BTC', 'KAIA', '1000CHEEMS', 'ACH', '1INCH', 'ZRX', 'STORJ', 'SUPER', 'ZEC', 'FIDA', 'OGN', 'ENA', 'EIGEN', 'XVS', 'GMT', 'RESOLV', 'GAL', 'TON', 'PUNDIX', 'VET', 'ETHFI', 'GAS', 'ZIL', 'ICX', 'KNC', 'DIA', 'ALPINE', 'T', 'SOL', 'KLAY', 'GLM', 'RIF', 'ILV', 'AVAX', 'CVX', 'BAND', 'XVG', 'CVC', 'CAKE', 'ETH', 'IMX', 'ONT', 'XRP', 'CHZ', 'RAY', 'ENS', 'ASTR', 'NEAR', 'ID', 'JOE', 'STMX', 'OP', 'BANANA', 'FTM', 'SUN', 'WIF', 'TWT', 'BOME', 'LUMIA', 'RARE', 'WCT', 'XTZ', 'PUMP', 'METIS', '1MBABYDOGE', 
+];
+
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 async function requestNotifPermission() {
@@ -803,6 +744,409 @@ async function cancellableWait(ms, abortRef) {
     }
 }
 
+// ─── OpenPositionModal ─────────────────────────────────────────────────────────
+// Opens a real LIMIT order on Bitunix Futures sized at the fixed "Monto/operación"
+// amount (ver app/lib/autoTrade.js), using the entry/SL/TP1 levels shown on the
+// card. TP/SL are attached to the same order as market-triggered exits
+// (tpOrderType/slOrderType = MARKET) so no separate tpsl order call is needed.
+const INITIAL_LEVERAGE = 2;    // Apalancamiento inicial para todas las posiciones abiertas desde esta pantalla
+const MAX_LEVERAGE     = 10;    // Tope al que se escala si Bitunix rechaza la orden
+
+function OpenPositionModal({ coin, result, levels, onClose }) {
+    const [balance,  setBalance]  = useState(null);
+    const [balErr,   setBalErr]   = useState(null);
+    const [status,   setStatus]   = useState("loading"); // loading | idle | sending | success | error
+    const [apiResp,  setApiResp]  = useState(null);
+    const [leverage, setLeverage] = useState(INITIAL_LEVERAGE);
+    const [manualLeverage, setManualLeverage] = useState(INITIAL_LEVERAGE);
+
+    const sym        = coin.symbol.toUpperCase();
+    const symbolPair = `${sym}USDT`;
+    const meta        = PATTERN_META[result.type] ?? {};
+    const isBull      = meta.bias === "bullish";
+    const dec         = levels.entry < 1 ? 6 : levels.entry < 10 ? 4 : 2;
+
+    useEffect(() => {
+        const h = e => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    const fetchBalance = () => {
+        setStatus("loading");
+        setBalErr(null);
+        fetch('/api/bitunix/api/v1/futures/account?marginCoin=USDT')
+            .then(r => r.json())
+            .then(json => {
+                if (json.code !== undefined && json.code !== 0 && json.code !== '0')
+                    throw new Error(`[${json.code}] ${json.msg || 'Error de API'}`);
+                const acct = [json.data, json.result, json]
+                    .map(x => Array.isArray(x) ? x[0] : x)
+                    .find(x => x?.available != null);
+                if (!acct) throw new Error('No se pudo leer el saldo disponible (campo "available" no encontrado)');
+                setBalance(parseFloat(acct.available));
+                setStatus("idle");
+            })
+            .catch(err => { setBalErr(err.message); setStatus("error"); });
+    };
+
+    useEffect(() => { fetchBalance(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const capital = getTradeAmount(); // monto configurado = margen objetivo, no el nocional
+    const insufficientBalance = balance != null && capital > balance;
+    // El nocional (y por lo tanto qty) se calcula multiplicando el margen objetivo por
+    // el apalancamiento elegido, así margen = nocional ÷ apalancamiento = capital —
+    // en vez de capital ÷ apalancamiento, que dejaba el margen real muy por debajo
+    // del monto configurado.
+    const notional = capital * manualLeverage;
+    const qty      = levels.entry > 0 ? notional / levels.entry : null;
+    const qtyStr   = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
+
+    // Como qty ahora escala con el apalancamiento para mantener el margen fijo en
+    // "capital", subir el apalancamiento agranda la posición (y por lo tanto la
+    // ganancia/pérdida en dólares) mientras el margen comprometido se mantiene igual.
+    const dir      = isBull ? 1 : -1;
+    const margin   = capital;
+    const pnlTp1   = qty != null ? qty * (levels.tp1 - levels.entry) * dir : null;
+    const pnlSl    = qty != null ? qty * (levels.sl  - levels.entry) * dir : null;
+    const roiTp1   = margin > 0 && pnlTp1 != null ? (pnlTp1 / margin) * 100 : null;
+    const roiSl    = margin > 0 && pnlSl  != null ? (pnlSl  / margin) * 100 : null;
+
+    // Un intento completo: ajustar apalancamiento y luego colocar la orden.
+    const attemptOrder = async (lev) => {
+        setLeverage(lev);
+
+        const levRes = await fetch("/api/bitunix/api/v1/futures/account/change_leverage", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: symbolPair, leverage: lev, marginCoin: "USDT" }),
+        });
+        const levData = await levRes.json();
+        const levOk = levData?.code === 0 || levData?.code === "0";
+        if (!levOk) return { ok: false, data: { step: "change_leverage", leverage: lev, ...levData } };
+
+        const body = JSON.stringify({
+            symbol:      symbolPair,
+            side:        isBull ? "BUY" : "SELL",
+            tradeSide:   "OPEN",
+            orderType:   "MARKET",
+            qty:         qtyStr,
+            tpPrice:     String(levels.tp1),
+            tpStopType:  "LAST_PRICE",
+            tpOrderType: "MARKET",
+            slPrice:     String(levels.sl),
+            slStopType:  "LAST_PRICE",
+            slOrderType: "MARKET",
+        });
+        const res  = await fetch("/api/bitunix/api/v1/futures/trade/place_order", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+        });
+        const data = await res.json();
+        const ok = data?.code === 0 || data?.code === "0" || data?.data?.orderId;
+        return { ok, data: { step: "place_order", leverage: lev, ...data } };
+    };
+
+    // Parte del apalancamiento elegido manualmente. Si un intento falla, reintenta
+    // subiendo el apalancamiento (hasta MAX_LEVERAGE) antes de rendirse — un rechazo
+    // por margen insuficiente puede resolverse con más apalancamiento (mismo capital,
+    // menor margen requerido); otros rechazos (p.ej. precisión de cantidad) fallarán
+    // igual en cada intento y se reportan tal cual.
+    const handleConfirm = async () => {
+        if (!qtyStr) return;
+        setStatus("sending");
+        try {
+            let lev = manualLeverage;
+            let result = await attemptOrder(lev);
+            while (!result.ok && lev < MAX_LEVERAGE) {
+                lev += 1;
+                result = await attemptOrder(lev);
+            }
+            setApiResp(result.data);
+            setStatus(result.ok ? "success" : "error");
+        } catch (err) {
+            setApiResp({ error: err.message });
+            setStatus("error");
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                <div className={`px-6 py-4 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between ${
+                    status === "success" ? "bg-green-50 dark:bg-green-950" : status === "error" ? "bg-red-50 dark:bg-red-950" : ""
+                }`}>
+                    <div>
+                        <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">Abrir posición</h2>
+                        <p className="text-gray-400 dark:text-slate-500 text-xs mt-0.5">
+                            {symbolPair} · <span className={`font-bold ${isBull ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
+                                {isBull ? "LONG" : "SHORT"}
+                            </span>
+                        </p>
+                    </div>
+                    <button onClick={onClose}
+                        className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div className="px-6 py-5">
+                    {status === "loading" && (
+                        <div className="flex items-center justify-center py-10 text-gray-400 dark:text-slate-500 gap-3">
+                            <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            Consultando saldo disponible…
+                        </div>
+                    )}
+
+                    {(status === "idle" || status === "sending") && balance != null && (
+                        <>
+                            <div className={`rounded-xl p-4 text-center mb-3 ${insufficientBalance ? "bg-red-500 dark:bg-red-600" : "bg-indigo-500 dark:bg-indigo-600"}`}>
+                                <p className="text-[10px] font-semibold text-white/75 uppercase tracking-widest mb-1">Margen a usar en esta operación</p>
+                                <p className="text-2xl font-black text-white">${fmt(capital, 2)}</p>
+                                <p className="text-[10px] text-white/70 mt-0.5">
+                                    {insufficientBalance ? "⚠ excede el saldo disponible" : `Monto/operación configurado · nocional $${fmt(notional, 2)} @ ${manualLeverage}×`}
+                                </p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                <div className="bg-gray-50 dark:bg-slate-800 rounded-xl p-3 text-center">
+                                    <p className="text-gray-400 dark:text-slate-500 text-[10px] uppercase tracking-wide font-semibold mb-1">Saldo disponible</p>
+                                    <p className="font-bold text-sm text-gray-800 dark:text-slate-100">${fmt(balance, 2)}</p>
+                                </div>
+                                <div className="bg-amber-50 dark:bg-amber-950 rounded-xl p-3 text-center">
+                                    <p className="text-amber-500 dark:text-amber-400 text-[10px] uppercase tracking-wide font-semibold mb-1">Apalancamiento</p>
+                                    {status === "sending" ? (
+                                        <p className="font-bold text-sm text-amber-700 dark:text-amber-300">{leverage}×</p>
+                                    ) : (
+                                        <div className="flex items-center justify-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setManualLeverage(l => Math.max(1, l - 1))}
+                                                disabled={manualLeverage <= 1}
+                                                className="w-6 h-6 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-700 dark:text-amber-200 font-bold text-sm leading-none disabled:opacity-40"
+                                            >
+                                                −
+                                            </button>
+                                            <span className="font-bold text-sm text-amber-700 dark:text-amber-300 w-8 tabular-nums">{manualLeverage}×</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => setManualLeverage(l => Math.min(MAX_LEVERAGE, l + 1))}
+                                                disabled={manualLeverage >= MAX_LEVERAGE}
+                                                className="w-6 h-6 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-700 dark:text-amber-200 font-bold text-sm leading-none disabled:opacity-40"
+                                            >
+                                                +
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                <div className="bg-indigo-50 dark:bg-indigo-950/40 rounded-lg p-2 text-center border border-indigo-200 dark:border-indigo-800">
+                                    <p className="text-[9px] font-semibold text-indigo-500 uppercase tracking-wide">Entrada</p>
+                                    <p className="text-xs font-bold text-indigo-700 dark:text-indigo-300 font-mono">${fmt(levels.entry, dec)}</p>
+                                </div>
+                                <div className="bg-red-50 dark:bg-red-950/40 rounded-lg p-2 text-center border border-red-200 dark:border-red-800">
+                                    <p className="text-[9px] font-semibold text-red-500 uppercase tracking-wide">SL</p>
+                                    <p className="text-xs font-bold text-red-700 dark:text-red-300 font-mono">${fmt(levels.sl, dec)}</p>
+                                </div>
+                                <div className="bg-green-50 dark:bg-green-950/40 rounded-lg p-2 text-center border border-green-200 dark:border-green-800">
+                                    <p className="text-[9px] font-semibold text-green-600 uppercase tracking-wide">TP1</p>
+                                    <p className="text-xs font-bold text-green-700 dark:text-green-300 font-mono">${fmt(levels.tp1, dec)}</p>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                <div className="rounded-xl p-3 text-center bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800">
+                                    <p className="text-[9px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide mb-0.5">Ganancia potencial (TP1)</p>
+                                    <p className="text-sm font-bold text-green-700 dark:text-green-300 font-mono">+${fmt(pnlTp1, 2)}</p>
+                                    <p className="text-[10px] text-green-500 dark:text-green-400/80">+{fmt(roiTp1, 1)}% sobre margen</p>
+                                </div>
+                                <div className="rounded-xl p-3 text-center bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800">
+                                    <p className="text-[9px] font-semibold text-red-500 dark:text-red-400 uppercase tracking-wide mb-0.5">Pérdida potencial (SL)</p>
+                                    <p className="text-sm font-bold text-red-700 dark:text-red-300 font-mono">${fmt(pnlSl, 2)}</p>
+                                    <p className="text-[10px] text-red-500 dark:text-red-400/80">{fmt(roiSl, 1)}% sobre margen</p>
+                                </div>
+                            </div>
+                            <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-2 -mt-2 italic">
+                                El margen se mantiene fijo en el monto/operación configurado — subir el apalancamiento agranda la posición (y la ganancia/pérdida en dólares) sin comprometer más margen.
+                            </p>
+                            <p className="text-sm text-gray-500 dark:text-slate-400 mb-2">
+                                Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{manualLeverage}×</span> y se enviará una orden{" "}
+                                <span className="font-bold text-gray-800 dark:text-slate-100">MARKET {isBull ? "BUY" : "SELL"}</span> por{" "}
+                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(notional, 2)} nocional, ${fmt(capital, 2)} margen) a precio de mercado, con TP/SL adjuntos a mercado.
+                            </p>
+                            <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-5 italic">
+                                La cantidad es una estimación (monto/operación × apalancamiento ÷ precio de entrada). Si Bitunix rechaza la orden, se reintenta subiendo el
+                                apalancamiento ({INITIAL_LEVERAGE}× → {MAX_LEVERAGE}× máx.) antes de reportar el error.
+                            </p>
+                            <button onClick={handleConfirm} disabled={status === "sending" || !qtyStr || insufficientBalance}
+                                className={`w-full font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 text-white disabled:opacity-60 ${
+                                    isBull ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
+                                }`}>
+                                {status === "sending" ? `Enviando orden… (${leverage}×)` : `Confirmar ${isBull ? "LONG" : "SHORT"}`}
+                            </button>
+                        </>
+                    )}
+
+                    {status === "success" && (
+                        <div className="text-center py-6">
+                            <div className="w-14 h-14 bg-green-100 dark:bg-green-950 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round">
+                                    <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                            </div>
+                            <p className="font-bold text-gray-800 dark:text-slate-100 text-lg">Orden enviada</p>
+                            <p className="text-gray-400 dark:text-slate-500 text-sm mt-1 mb-4">
+                                {qtyStr} {sym} @ mercado · TP1 ${fmt(levels.tp1, dec)} · SL ${fmt(levels.sl, dec)} · {leverage}×
+                            </p>
+                            {leverage > INITIAL_LEVERAGE && (
+                                <p className="text-[10px] text-amber-500 dark:text-amber-400 -mt-3 mb-4">
+                                    Se subió el apalancamiento a {leverage}× tras un rechazo inicial en {INITIAL_LEVERAGE}×.
+                                </p>
+                            )}
+                            <button onClick={onClose}
+                                className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-semibold px-6 py-2 rounded-xl transition-colors">
+                                Cerrar
+                            </button>
+                        </div>
+                    )}
+
+                    {status === "error" && (
+                        <div className="text-center py-4">
+                            <div className="w-14 h-14 bg-red-100 dark:bg-red-950 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
+                                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                            </div>
+                            <p className="font-bold text-red-600 dark:text-red-400 mb-2">
+                                {balErr ? "Error al consultar saldo"
+                                    : apiResp?.step === "change_leverage" ? "Error al ajustar el apalancamiento"
+                                    : "Error al enviar la orden"}
+                            </p>
+                            {!balErr && apiResp && (
+                                <p className="text-xs text-gray-400 dark:text-slate-500 mb-2">
+                                    Se reintentó subiendo el apalancamiento hasta {leverage}× {leverage >= MAX_LEVERAGE ? "(máximo) " : ""}sin éxito.
+                                </p>
+                            )}
+                            {(balErr || apiResp) && (
+                                <pre className="text-xs bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 rounded-xl p-3 text-left overflow-auto max-h-36 mb-4">
+                                    {balErr || JSON.stringify(apiResp, null, 2)}
+                                </pre>
+                            )}
+                            <div className="flex gap-2 justify-center">
+                                <button onClick={() => balance == null ? fetchBalance() : setStatus("idle")}
+                                    className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-semibold px-5 py-2 rounded-xl transition-colors">
+                                    Reintentar
+                                </button>
+                                <button onClick={onClose}
+                                    className="bg-red-50 dark:bg-red-950 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-400 font-semibold px-5 py-2 rounded-xl transition-colors">
+                                    Cancelar
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─── PatternChartModal ─────────────────────────────────────────────────────────
+// Velas 1H/4H (conmutable) con líneas de referencia para Entrada/TP1/SL —
+// mismo estilo que el gráfico de velas del modal TP/SL en app/bitunix/page.jsx.
+function PatternChartModal({ coin, levels, onClose }) {
+    const [candles,        setCandles]        = useState(null);
+    const [error,          setError]          = useState(null);
+    const [chartInterval,  setChartInterval]  = useState('4h');
+    const sym        = coin.symbol.toUpperCase();
+    const symbolPair = `${sym}USDT`;
+
+    useEffect(() => {
+        const h = e => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    useEffect(() => {
+        setCandles(null);
+        setError(null);
+        fetch(`/api/binance/api/v3/klines?symbol=${symbolPair}&interval=${chartInterval}&limit=100`)
+            .then(r => r.json())
+            .then(raw => {
+                if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
+                setCandles(raw.map(([openTime, open, high, low, close]) => ({
+                    time:  Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
+                    open:  parseFloat(open),
+                    high:  parseFloat(high),
+                    low:   parseFloat(low),
+                    close: parseFloat(close),
+                })));
+            })
+            .catch(err => setError(err.message));
+    }, [symbolPair, chartInterval]);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-800">
+                    <h2 className="font-bold text-gray-800 dark:text-slate-100 text-lg">{symbolPair} · Velas {chartInterval.toUpperCase()}</h2>
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center bg-gray-100 dark:bg-slate-800 rounded-lg p-0.5">
+                            {['1h', '4h'].map(iv => (
+                                <button
+                                    key={iv}
+                                    type="button"
+                                    onClick={() => setChartInterval(iv)}
+                                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                                        chartInterval === iv
+                                            ? "bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 shadow-sm"
+                                            : "text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300"
+                                    }`}
+                                >
+                                    {iv.toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
+                        <button onClick={onClose}
+                            className="text-gray-300 dark:text-slate-600 hover:text-gray-600 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div className="px-6 py-5">
+                    {error ? (
+                        <p className="text-center text-red-400 dark:text-red-500 text-xs py-8">No se pudieron cargar las velas: {error}</p>
+                    ) : !candles ? (
+                        <div className="flex items-center justify-center py-16 text-gray-300 dark:text-slate-600 gap-2 text-sm">
+                            <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            Cargando velas…
+                        </div>
+                    ) : (
+                        <CandlestickChart
+                            data={candles}
+                            entry={levels.entry}
+                            sl={levels.sl}
+                            tp1={levels.tp1}
+                            emaPeriod={50}
+                            stochastic={{ period: 14, smoothK: 3, smoothD: 3 }}
+                            height={340}
+                        />
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ─── PatternCard ──────────────────────────────────────────────────────────────
 function PatternCard({ coin, result, updatedAt }) {
     const meta  = PATTERN_META[result.type] ?? {};
@@ -833,6 +1177,9 @@ function PatternCard({ coin, result, updatedAt }) {
 
     const conds  = getEntryConditions(result);
     const allMet = conds.every(c => c.ok);
+    const lv     = calcLevels(result);
+    const [showOpenModal, setShowOpenModal] = useState(false);
+    const [showChart, setShowChart] = useState(false);
 
     const borderCls = allMet
         ? "border-amber-400 dark:border-amber-500 ring-2 ring-amber-200 dark:ring-amber-900"
@@ -986,7 +1333,6 @@ function PatternCard({ coin, result, updatedAt }) {
 
             {/* Entry / TP / SL — always shown; highlighted when all conditions met */}
             {(() => {
-                const lv  = calcLevels(result);
                 if (!lv) return null;
                 const dec   = result.hEnd < 1 ? 5 : result.hEnd < 10 ? 4 : 2;
                 const rrCls = lv.rr >= 2   ? "text-green-600 dark:text-green-400"
@@ -1056,6 +1402,30 @@ function PatternCard({ coin, result, updatedAt }) {
                 );
             })()}
 
+            {/* Abrir posición — LIMIT order sized at the configured Monto/operación */}
+            {lv && (
+                <button
+                    type="button"
+                    onClick={() => setShowOpenModal(true)}
+                    className={`w-full mb-3 text-xs font-bold py-2 rounded-xl transition-colors text-white ${
+                        isBull ? "bg-green-500 hover:bg-green-600" : isBear ? "bg-red-500 hover:bg-red-600" : "bg-indigo-500 hover:bg-indigo-600"
+                    }`}
+                >
+                    Abrir posición
+                </button>
+            )}
+
+            {/* Ver gráfico de velas con Entrada/TP1/SL */}
+            {lv && (
+                <button
+                    type="button"
+                    onClick={() => setShowChart(true)}
+                    className="w-full mb-3 text-xs font-bold py-2 rounded-xl transition-colors text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 hover:bg-indigo-100 dark:hover:bg-indigo-900"
+                >
+                    📊 Ver gráfico
+                </button>
+            )}
+
             {/* Links */}
             <div className="flex gap-2 pt-3 border-t border-gray-100 dark:border-slate-700">
                 <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
@@ -1069,6 +1439,13 @@ function PatternCard({ coin, result, updatedAt }) {
                     Ver en TradingView
                 </a>
             </div>
+
+            {showOpenModal && lv && (
+                <OpenPositionModal coin={coin} result={result} levels={lv} onClose={() => setShowOpenModal(false)} />
+            )}
+            {showChart && lv && (
+                <PatternChartModal coin={coin} levels={lv} onClose={() => setShowChart(false)} />
+            )}
         </div>
     );
 }
@@ -1081,6 +1458,9 @@ function BreakoutCard({ coin, result, updatedAt }) {
     const sym     = coin.symbol.toUpperCase();
     const urgency = result.daysToApex !== null && result.daysToApex <= 5 ? "high"
                   : result.daysToApex !== null && result.daysToApex <= 10 ? "med" : "low";
+    const lv      = calcLevels(result);
+    const [showOpenModal, setShowOpenModal] = useState(false);
+    const [showChart, setShowChart] = useState(false);
 
     return (
         <div className={`relative rounded-2xl border-2 p-4 overflow-hidden ${
@@ -1172,7 +1552,6 @@ function BreakoutCard({ coin, result, updatedAt }) {
 
             {/* Entry / TP / SL for BreakoutCard */}
             {(() => {
-                const lv    = calcLevels(result);
                 const conds = getEntryConditions(result);
                 const allMet = conds.every(c => c.ok);
                 if (!lv) return null;
@@ -1222,6 +1601,19 @@ function BreakoutCard({ coin, result, updatedAt }) {
                 );
             })()}
 
+            {/* Abrir posición — LIMIT order sized at the configured Monto/operación */}
+            {lv && (
+                <button
+                    type="button"
+                    onClick={() => setShowOpenModal(true)}
+                    className={`w-full mt-2 text-[10px] font-bold py-1.5 rounded-lg transition-colors text-white ${
+                        isBull ? "bg-green-500 hover:bg-green-600" : isBear ? "bg-red-500 hover:bg-red-600" : "bg-indigo-500 hover:bg-indigo-600"
+                    }`}
+                >
+                    Abrir posición
+                </button>
+            )}
+
             {/* Links */}
             <div className="flex gap-2 mt-2">
                 <a href={`https://www.bitunix.com/es-es/contract-trade/${sym}USDT`}
@@ -1234,7 +1626,20 @@ function BreakoutCard({ coin, result, updatedAt }) {
                    className="flex-1 text-center text-[10px] font-semibold py-1 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 hover:bg-blue-100 transition-colors">
                     TradingView
                 </a>
+                {lv && (
+                    <button type="button" onClick={() => setShowChart(true)}
+                        className="flex-1 text-center text-[10px] font-semibold py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-colors">
+                        📊 Gráfico
+                    </button>
+                )}
             </div>
+
+            {showOpenModal && lv && (
+                <OpenPositionModal coin={coin} result={result} levels={lv} onClose={() => setShowOpenModal(false)} />
+            )}
+            {showChart && lv && (
+                <PatternChartModal coin={coin} levels={lv} onClose={() => setShowChart(false)} />
+            )}
         </div>
     );
 }
@@ -1374,15 +1779,20 @@ export default function PatronesPage() {
                 if (Array.isArray(tickers)) tickers.forEach(t => { bySymbol[t.symbol] = t; });
 
                 // Símbolo base (sin el prefijo "1000x"/"1Mx" que usa Bitunix para contratos
-                // con multiplicador) — Binance usa siempre el ticker real.
+                // con multiplicador) — Binance normalmente lista el ticker real sin ese
+                // prefijo, pero para algunos (ej. 1000CHEEMS, 1MBABYDOGE) sí lo conserva;
+                // prefixedFallback guarda el nombre original para probarlo si el base no matchea.
                 const baseSymbols = new Set();
+                const prefixedFallback = new Map();
                 BITUNIX_TICKERS.forEach(raw => {
                     const base = raw.replace(/^1000/, '').replace(/^1M/, '');
-                    if (base) baseSymbols.add(base);
+                    if (!base) return;
+                    baseSymbols.add(base);
+                    if (base !== raw) prefixedFallback.set(base, raw);
                 });
 
                 const list = [...baseSymbols].map(sym => {
-                    const t = bySymbol[`${sym}USDT`];
+                    const t = bySymbol[`${sym}USDT`] ?? (prefixedFallback.has(sym) ? bySymbol[`${prefixedFallback.get(sym)}USDT`] : undefined);
                     return {
                         id:                          sym.toLowerCase(),
                         symbol:                      sym.toLowerCase(),
@@ -1403,6 +1813,12 @@ export default function PatronesPage() {
         load();
         return () => { cancelled = true; };
     }, [bitunixSymbols]);
+
+    // Cobertura Bitunix vs Binance: ¿tenemos precio en vivo de Binance para este ticker?
+    // El scan solo corre sobre foundCoins — los símbolos sin match en Binance no
+    // tienen velas que analizar, así que escanearlos solo desperdicia tiempo/rate-limit.
+    const foundCoins    = coins.filter(c => c.current_price != null);
+    const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
 
     // Scan inicia solo con el botón "Actualizar ahora"
 
@@ -1443,12 +1859,12 @@ export default function PatronesPage() {
                             // el auto-trade y el log de backtest se evalúan en CADA escaneo
                             // que el checklist esté completo, sin importar si ya se había
                             // notificado antes por otro valor de ápice. daysToApex se
-                            // recalcula cada escaneo (regresión sobre las últimas velas) y no
-                            // baja de forma perfectamente monótona: si se anidaba todo bajo
-                            // "!notifiedRef.has(coin)", una moneda que ya notificó una vez con
-                            // ápice≠10 nunca volvía a evaluarse cuando el ápice llegaba recién
-                            // ahí al valor exacto configurado — el auto-trade se quedaba sin
-                            // disparar en silencio, sin ningún log de error.
+                            // recalcula cada escaneo (regresión sobre las últimas 200 velas)
+                            // y no baja de forma perfectamente monótona: si se anidaba todo
+                            // bajo "!notifiedRef.has(coin)", una moneda que ya notificó una
+                            // vez con ápice≠10 nunca volvía a evaluarse cuando el ápice
+                            // llegaba recién ahí al valor exacto configurado — el auto-trade
+                            // se quedaba sin disparar en silencio, sin ningún log de error.
                             if (!notifiedRef.current.has(coin.id)) {
                                 notifiedRef.current.add(coin.id);
                                 sendPatternNotification(coin, data, meta.label, bias);
@@ -1471,7 +1887,7 @@ export default function PatronesPage() {
                             // Log de backtesting: ápice 8-10 días + TP2 favorable (R:R >= 2),
                             // independiente de si el auto-trade real está activado o no.
                             if (isBacktestApexTarget(data) && levels && isFavorableTp2(levels)) {
-                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label });
+                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones', capital: getTradeAmount() });
                             }
                         }
                     }
@@ -1490,27 +1906,34 @@ export default function PatronesPage() {
             setCurrentCoin(null);
             setLastScan(new Date());
             setScanRunning(false);
+
+            // Reinicia el escaneo apenas termina, sin esperar la siguiente marca
+            // de :00/:30 — usa las refs (siempre actualizadas) para no arrastrar
+            // closures viejas de una corrida que pudo haber tardado varios minutos.
+            if (coinsRef.current.length > 0) {
+                setTimeout(() => runScanRef.current?.(coinsRef.current), 150);
+            }
         }
     };
 
     const restartScan = () => {
         scanGenRef.current++; // invalida de inmediato cualquier scan en curso
-        setTimeout(() => { if (coins.length > 0) runScan(coins); }, 150);
+        setTimeout(() => { if (foundCoins.length > 0) runScan(foundCoins); }, 150);
     };
 
     // Refs siempre actualizados — evitan que el efecto de scheduling tenga que
-    // depender de runScan/coins/scanRunning (que cambian cada render) y se reprograme
-    // de más; el timeout de larga duración se programa una sola vez.
+    // depender de runScan/foundCoins/scanRunning (que cambian cada render) y se
+    // reprograme de más; el timeout de larga duración se programa una sola vez.
     const runScanRef     = useRef(null);
     const coinsRef        = useRef([]);
     const scanRunningRef  = useRef(false);
     useEffect(() => {
         runScanRef.current    = runScan;
-        coinsRef.current       = coins;
+        coinsRef.current       = foundCoins;
         scanRunningRef.current = scanRunning;
     });
 
-    // ─── Scan automático diario a las 06:00 a.m. hora de México ───────────────
+    // ─── Scan automático cada 30 minutos, alineado a :00 y :30 ────────────────
     useEffect(() => {
         let timeoutId;
         const scheduleNext = () => {
@@ -1518,8 +1941,8 @@ export default function PatronesPage() {
                 if (!scanRunningRef.current && coinsRef.current.length > 0) {
                     runScanRef.current?.(coinsRef.current);
                 }
-                scheduleNext(); // reprograma para el día siguiente
-            }, msUntilNextMexicoScan());
+                scheduleNext(); // reprograma para la siguiente marca de :00/:30
+            }, msUntilNextHalfHour());
         };
         scheduleNext();
         return () => clearTimeout(timeoutId);
@@ -1576,17 +1999,13 @@ export default function PatronesPage() {
         ? Math.ceil((progress.total - progress.done) * GAP_MS / 60_000) : 0;
     const initialLoad = bitunixSymbols === null || loadingCoins;
 
-    // Cobertura Bitunix vs Binance: ¿tenemos precio en vivo de Binance para este ticker?
-    const foundCoins    = coins.filter(c => c.current_price != null);
-    const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
-
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-slate-950 py-10 px-6">
             <div className="max-w-6xl mx-auto">
 
                 {/* ─── Header ───────────────────────────────────────────────── */}
                 <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión</h1>
+                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión (4H)</h1>
                     <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
                         Detección automática en gráfico 4H · Taza y Asa · Triángulos · Cuñas · Banderas · Banderines
                     </p>
@@ -1618,8 +2037,8 @@ export default function PatronesPage() {
                             </span>
                         )}
                         {!scanRunning && (
-                            <span className="text-xs text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2.5 py-1 rounded-full" title="Scan automático 6 veces al día (06/10/14/18/22/02h) hora de México">
-                                ⏰ Próximo auto-scan: {new Date(Date.now() + msUntilNextMexicoScan()).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} (Méx)
+                            <span className="text-xs text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2.5 py-1 rounded-full" title="El escaneo se reinicia automáticamente en cuanto termina">
+                                🔁 Reinicio automático al terminar
                             </span>
                         )}
                         <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"

@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { CandlestickChart } from '../../components/CandlestickChart'
-import { fetchBacktestLog } from '../lib/backtestLog'
+import { fetchBacktestLog, updateTradeLevels } from '../lib/backtestLog'
 
 // Monto asumido por operación para estimar el P&L en USDT — el log no guarda
 // el tamaño real de la posición, así que se usa un monto fijo de referencia.
@@ -51,6 +51,13 @@ const STATUS_META = {
     en_proceso: { label: 'En proceso', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400' },
 }
 
+// Qué scanner generó el hallazgo. Los registros creados antes de este cambio
+// no tienen `origen` (quedó null) y no se pueden reclasificar retroactivamente.
+const ORIGEN_META = {
+    'patrones':    { label: '4H', classes: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' },
+    'patrones-1h': { label: '1H', classes: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300' },
+}
+
 const STATUS_GROUPS = [
     { key: 'en_proceso', label: 'En proceso' },
     { key: 'ganadora',   label: 'Ganadoras' },
@@ -62,9 +69,11 @@ function fmt(n) {
     return n < 1 ? n.toFixed(6) : n.toFixed(2)
 }
 
-// Ganancia/pérdida estimada en USDT: no guardamos el tamaño real de la
-// posición en el log, así que se asume un monto fijo de PNL_NOTIONAL_USDT.
-// Ganadora → se asume cierre en TP1; Perdedora → en SL; En proceso → último precio (no realizada).
+// Ganancia/pérdida estimada en USDT. Los registros creados desde el cambio que
+// agregó `capital` (monto configurado al momento del hallazgo) usan ese valor
+// real; los anteriores no lo tienen y caen al monto fijo de referencia
+// PNL_NOTIONAL_USDT. Ganadora → se asume cierre en TP1; Perdedora → en SL;
+// En proceso → último precio (no realizada).
 function calcPnl(record) {
     const entry = record.precioEntrada
     if (entry == null) return null
@@ -75,8 +84,9 @@ function calcPnl(record) {
     if (exitPrice == null) return null
 
     const isLong = record.tipoPosicion === 'long'
+    const capital = record.capital ?? PNL_NOTIONAL_USDT
     const pct = isLong ? (exitPrice - entry) / entry : (entry - exitPrice) / entry
-    return { pct: pct * 100, usdt: pct * PNL_NOTIONAL_USDT }
+    return { pct: pct * 100, usdt: pct * capital }
 }
 
 function fmtUsdt(n) {
@@ -150,11 +160,76 @@ function IntervalPicker({ value, onChange }) {
     )
 }
 
-function BacktestCard({ record }) {
+// Edición manual de TP1/SL — solo tiene sentido en operativas "en_proceso":
+// una vez cerrada, calcPnl() ya usó esos valores como precio de salida, así
+// que editarlos reescribiría el resultado histórico de la operación.
+function LevelsEditor({ record, onSaved, onCancel }) {
+    const [sl, setSl] = useState(String(record.stopLoss))
+    const [tp1, setTp1] = useState(String(record.takeProfit1))
+    const [saving, setSaving] = useState(false)
+    const [error, setError] = useState(null)
+
+    const slNum  = parseFloat(sl)
+    const tp1Num = parseFloat(tp1)
+    const isLong = record.tipoPosicion === 'long'
+    const entry  = record.precioEntrada
+    const validNumbers = Number.isFinite(slNum) && Number.isFinite(tp1Num)
+    // Solo se valida que SL/TP queden del lado correcto de la entrada según la
+    // dirección — el nivel exacto queda a criterio del usuario.
+    const validSide = validNumbers && (isLong ? slNum < entry && tp1Num > entry : slNum > entry && tp1Num < entry)
+    const canSave = validNumbers && validSide && !saving
+
+    const handleSave = async () => {
+        setSaving(true)
+        setError(null)
+        try {
+            await updateTradeLevels(record.id, { stopLoss: slNum, takeProfit1: tp1Num })
+            onSaved()
+        } catch (err) {
+            setError(err.message)
+            setSaving(false)
+        }
+    }
+
+    return (
+        <div className="grid grid-cols-2 gap-2 text-xs bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg p-3">
+            <label className="space-y-1">
+                <span className="text-gray-400 dark:text-slate-500">Stop-Loss</span>
+                <input type="number" step="any" value={sl} onChange={e => setSl(e.target.value)}
+                    className="w-full rounded-md border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-red-600 dark:text-red-400 font-medium" />
+            </label>
+            <label className="space-y-1">
+                <span className="text-gray-400 dark:text-slate-500">TP1</span>
+                <input type="number" step="any" value={tp1} onChange={e => setTp1(e.target.value)}
+                    className="w-full rounded-md border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-green-600 dark:text-green-400 font-medium" />
+            </label>
+            {validNumbers && !validSide && (
+                <p className="col-span-2 text-red-500 dark:text-red-400">
+                    {isLong ? 'En un LONG, el SL debe quedar bajo la entrada y el TP1 sobre la entrada.'
+                            : 'En un SHORT, el SL debe quedar sobre la entrada y el TP1 bajo la entrada.'}
+                </p>
+            )}
+            {error && <p className="col-span-2 text-red-500 dark:text-red-400">Error al guardar: {error}</p>}
+            <div className="col-span-2 flex justify-end gap-2 pt-1">
+                <button type="button" onClick={onCancel} disabled={saving}
+                    className="px-3 py-1 rounded-full font-semibold text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50">
+                    Cancelar
+                </button>
+                <button type="button" onClick={handleSave} disabled={!canSave}
+                    className="px-3 py-1 rounded-full font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    {saving ? 'Guardando…' : 'Guardar'}
+                </button>
+            </div>
+        </div>
+    )
+}
+
+function BacktestCard({ record, onUpdated }) {
     const [candles, setCandles] = useState(null)
     const [error, setError] = useState(null)
     const [showChartModal, setShowChartModal] = useState(false)
     const [chartInterval, setChartInterval] = useState(DEFAULT_CANDLE_INTERVAL)
+    const [editingLevels, setEditingLevels] = useState(false)
     const meta = STATUS_META[record.estatus] ?? STATUS_META.en_proceso
     const isLong = record.tipoPosicion === 'long'
     const isClosed = record.estatus === 'ganadora' || record.estatus === 'perdedora'
@@ -205,30 +280,53 @@ function BacktestCard({ record }) {
                     {record.patternLabel && (
                         <span className="text-xs text-gray-400 dark:text-slate-500">{record.patternLabel}</span>
                     )}
+                    {ORIGEN_META[record.origen] && (
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${ORIGEN_META[record.origen].classes}`}
+                              title={record.origen === 'patrones' ? 'Detectado por /patrones (4H)' : 'Detectado por /patrones-1h (1H)'}>
+                            {ORIGEN_META[record.origen].label}
+                        </span>
+                    )}
                     <a href={`https://www.bitunix.com/es-es/contract-trade/${record.activo}`}
                        target="_blank" rel="noopener noreferrer"
                        className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900 transition-colors">
                         Ver en Bitunix
                     </a>
+                    {!isClosed && !editingLevels && (
+                        <button type="button" onClick={() => setEditingLevels(true)}
+                            className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors">
+                            ✏️ Editar TP/SL
+                        </button>
+                    )}
                 </div>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${meta.classes}`}>{meta.label}</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                <div><div className="text-gray-400 dark:text-slate-500">Entrada</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmt(record.precioEntrada)}</div></div>
-                <div><div className="text-gray-400 dark:text-slate-500">Stop-Loss</div><div className="font-medium text-red-600 dark:text-red-400">{fmt(record.stopLoss)}</div></div>
-                <div><div className="text-gray-400 dark:text-slate-500">TP1</div><div className="font-medium text-green-600 dark:text-green-400">{fmt(record.takeProfit1)}</div></div>
-                <div><div className="text-gray-400 dark:text-slate-500">Último precio</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmt(record.ultimoPrecio)}</div></div>
-                <div><div className="text-gray-400 dark:text-slate-500">Apertura</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmtTime(record.horaApertura)}</div></div>
-                <div><div className="text-gray-400 dark:text-slate-500">Cierre</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmtTime(record.horaCierre)}</div></div>
-                <div><div className="text-gray-400 dark:text-slate-500">Capital usado</div><div className="font-medium text-gray-700 dark:text-slate-200">{PNL_NOTIONAL_USDT.toFixed(2)} USDT</div></div>
-                <div>
-                    <div className="text-gray-400 dark:text-slate-500">{isClosed ? 'P&L estimado' : 'P&L no realizado'}</div>
-                    <div className={`font-medium ${pnl == null ? 'text-gray-400 dark:text-slate-500' : pnl.usdt >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
-                        {pnl == null ? '—' : `${fmtPct(pnl.pct)} · ${fmtUsdt(pnl.usdt)}`}
+            {editingLevels ? (
+                <LevelsEditor
+                    record={record}
+                    onCancel={() => setEditingLevels(false)}
+                    onSaved={() => { setEditingLevels(false); onUpdated?.() }}
+                />
+            ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div><div className="text-gray-400 dark:text-slate-500">Entrada</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmt(record.precioEntrada)}</div></div>
+                    <div><div className="text-gray-400 dark:text-slate-500">Stop-Loss</div><div className="font-medium text-red-600 dark:text-red-400">{fmt(record.stopLoss)}</div></div>
+                    <div><div className="text-gray-400 dark:text-slate-500">TP1</div><div className="font-medium text-green-600 dark:text-green-400">{fmt(record.takeProfit1)}</div></div>
+                    <div><div className="text-gray-400 dark:text-slate-500">Último precio</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmt(record.ultimoPrecio)}</div></div>
+                    <div><div className="text-gray-400 dark:text-slate-500">Apertura</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmtTime(record.horaApertura)}</div></div>
+                    <div><div className="text-gray-400 dark:text-slate-500">Cierre</div><div className="font-medium text-gray-700 dark:text-slate-200">{fmtTime(record.horaCierre)}</div></div>
+                    <div>
+                        <div className="text-gray-400 dark:text-slate-500">Capital usado{record.capital == null ? ' (estimado)' : ''}</div>
+                        <div className="font-medium text-gray-700 dark:text-slate-200">{(record.capital ?? PNL_NOTIONAL_USDT).toFixed(2)} USDT</div>
+                    </div>
+                    <div>
+                        <div className="text-gray-400 dark:text-slate-500">{isClosed ? 'P&L estimado' : 'P&L no realizado'}</div>
+                        <div className={`font-medium ${pnl == null ? 'text-gray-400 dark:text-slate-500' : pnl.usdt >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                            {pnl == null ? '—' : `${fmtPct(pnl.pct)} · ${fmtUsdt(pnl.usdt)}`}
+                        </div>
                     </div>
                 </div>
-            </div>
+            )}
 
             {isClosed ? (
                 <button
@@ -338,7 +436,7 @@ export default function BacktestingPage() {
                         {fmtUsdt(totalClosedPnlUsdt)}
                     </div>
                     <div className="text-xs text-gray-400 dark:text-slate-500 mt-1">
-                        {enProceso > 0 ? `${fmtUsdt(totalOpenPnlUsdt)} no realizado en proceso` : `basado en $${PNL_NOTIONAL_USDT} por operación`}
+                        {enProceso > 0 ? `${fmtUsdt(totalOpenPnlUsdt)} no realizado en proceso` : `basado en el capital registrado por operación (o $${PNL_NOTIONAL_USDT} si no se registró)`}
                     </div>
                 </div>
             </div>
@@ -361,7 +459,7 @@ export default function BacktestingPage() {
                                 </span>
                             </div>
                             <div className="grid grid-cols-2 gap-5">
-                                {items.map(record => <BacktestCard key={record.id} record={record} />)}
+                                {items.map(record => <BacktestCard key={record.id} record={record} onUpdated={load} />)}
                             </div>
                         </div>
                     )

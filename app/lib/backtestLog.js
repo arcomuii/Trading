@@ -15,7 +15,7 @@ export async function fetchBacktestLog() {
 // Registra un nuevo hallazgo si el ápice está en 8-10 días y el TP2 es favorable.
 // El API deduplica: si ya hay un registro "en_proceso" para el mismo activo, no
 // crea uno nuevo (evita duplicar la misma operativa en cada corrida del scan).
-export async function logBacktestEntry({ coin, levels, isBull, patternLabel }) {
+export async function logBacktestEntry({ coin, levels, isBull, patternLabel, origen, capital }) {
     const activo = `${coin.symbol.toUpperCase()}USDT`;
     try {
         const res = await fetch('/api/backtesting', {
@@ -28,12 +28,33 @@ export async function logBacktestEntry({ coin, levels, isBull, patternLabel }) {
                 stopLoss: levels.sl,
                 takeProfit1: levels.tp1,
                 patternLabel: patternLabel ?? null,
+                // 'patrones' (4H) o 'patrones-1h' — qué scanner generó el hallazgo. Antes
+                // no se guardaba nada, así que los registros previos a este cambio no
+                // se pueden reclasificar retroactivamente (quedan con origen: null).
+                origen: origen ?? null,
+                // Monto configurado (getTradeAmount()) en el momento del hallazgo — el
+                // mismo que usaría tryAutoOpenPosition/OpenPositionModal como margen.
+                // Igual que `origen`, los registros previos a este cambio quedan sin él.
+                capital: capital ?? null,
             }),
         });
         if (!res.ok) console.error('[BacktestLog] Error al registrar', activo, await res.text());
     } catch (e) {
         console.error('[BacktestLog] Excepción al registrar', activo, e);
     }
+}
+
+// Actualiza manualmente el TP1/SL de una operativa "en_proceso" (edición desde
+// app/backtesting/page.jsx). Reutiliza el mismo PATCH que usa checkOpenTrades
+// para cerrar operativas — el API acepta cualquier subconjunto de campos.
+export async function updateTradeLevels(id, { stopLoss, takeProfit1 }) {
+    const res = await fetch('/api/backtesting', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, stopLoss, takeProfit1 }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
 }
 
 async function fetchLastPrice(symbol) {

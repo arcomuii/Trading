@@ -46,7 +46,7 @@ export async function GET() {
 // registro "en_proceso" para el mismo activo, no duplica — devuelve el existente.
 export async function POST(request) {
   const body = await request.json()
-  const { activo, tipoPosicion, precioEntrada, stopLoss, takeProfit1, patternLabel } = body
+  const { activo, tipoPosicion, precioEntrada, stopLoss, takeProfit1, patternLabel, origen, capital } = body
 
   if (!activo || !tipoPosicion || precioEntrada == null || stopLoss == null || takeProfit1 == null) {
     return NextResponse.json({ error: 'Faltan campos requeridos' }, { status: 400 })
@@ -65,6 +65,8 @@ export async function POST(request) {
       stopLoss,
       takeProfit1,
       patternLabel: patternLabel ?? null,
+      origen: origen ?? null,
+      capital: capital ?? null,
       horaApertura: new Date().toISOString(),
       horaCierre: null,
       estatus: 'en_proceso',

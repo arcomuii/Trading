@@ -64,9 +64,18 @@ function computeStochastic(data, period, smoothK, smoothD) {
 // estocástico (%K/%D) en un panel independiente debajo del precio.
 export function CandlestickChart({ data, entry, sl, tp1, emaPeriod, stochastic, height = 260 }) {
   const containerRef = useRef(null)
+  const chartRef = useRef(null)
+  const seriesRef = useRef({})
+  const hasFitRef = useRef(false)
 
+  // Crea el chart y sus series UNA sola vez (solo se reconstruye si cambia
+  // `height` o si aparece/desaparece la EMA o el estocástico — algo que en
+  // la práctica no pasa en este componente). A propósito NO depende de
+  // `data`/`entry`/`sl`/`tp1`/`stochastic` (ver el otro efecto): si el chart
+  // se recreara con cada actualización de datos, se perdía el zoom/pan que
+  // el usuario hubiera hecho, porque abajo se llama fitContent() al crear.
   useEffect(() => {
-    if (!containerRef.current || !data || data.length === 0) return
+    if (!containerRef.current) return
 
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
@@ -78,90 +87,73 @@ export function CandlestickChart({ data, entry, sl, tp1, emaPeriod, stochastic, 
       },
       timeScale: { timeVisible: true, secondsVisible: false },
     })
+    chartRef.current = chart
+    hasFitRef.current = false
 
-    // Zonas sombreadas: se dibujan primero para que las velas queden encima.
-    // Cada una es una línea plana (flat) al nivel del TP1/SL, con el relleno
-    // anclado (baseValue) en el precio de entrada.
-    const addZone = (flatPrice, fillColor) => {
-      if (flatPrice == null) return
-      const zoneSeries = chart.addSeries(AreaSeries, {
-        lineColor: 'rgba(0,0,0,0)',
-        lineWidth: 1,
-        topColor: fillColor,
-        bottomColor: fillColor,
-        baseValue: { type: 'price', price: entry },
-        priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      })
-      zoneSeries.setData(data.map(c => ({ time: c.time, value: flatPrice })))
-    }
-    addZone(tp1, 'rgba(251,192,45,0.15)')
-    addZone(sl, 'rgba(81,45,168,0.15)')
+    // Zonas sombreadas: se crean primero para que las velas queden encima.
+    // Arrancan sin datos — el otro efecto les carga los puntos reales.
+    const zoneOptions = fillColor => ({
+      lineColor: 'rgba(0,0,0,0)',
+      lineWidth: 1,
+      topColor: fillColor,
+      bottomColor: fillColor,
+      priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    const tp1Zone = chart.addSeries(AreaSeries, zoneOptions('rgba(251,192,45,0.15)'))
+    const slZone = chart.addSeries(AreaSeries, zoneOptions('rgba(81,45,168,0.15)'))
 
-    const series = chart.addSeries(CandlestickSeries, {
+    const candles = chart.addSeries(CandlestickSeries, {
       upColor: '#22c55e', downColor: '#ef4444',
       borderUpColor: '#22c55e', borderDownColor: '#ef4444',
       wickUpColor: '#22c55e', wickDownColor: '#ef4444',
       priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
     })
-    series.setData(data)
 
     // Sin "title": el precio sigue mostrándose del lado derecho (axisLabelVisible),
     // pero sin el texto "Entrada"/"SL"/"TP1" superpuesto — ese dato ya se ve en las
-    // tarjetas de arriba, y quitarlo evita que se amontonen las etiquetas.
-    const addLine = (price, color) => {
-      if (price == null) return
-      series.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true })
-    }
-    addLine(entry, '#3b82f6')
-    addLine(sl, '#512da8')
-    addLine(tp1, '#fbc02d')
+    // tarjetas de arriba, y quitarlo evita que se amontonen las etiquetas. Arrancan
+    // ocultas (lineVisible: false) hasta que el otro efecto les ponga un precio real.
+    const entryLine = candles.createPriceLine({ price: 0, color: '#3b82f6', lineWidth: 1, lineStyle: 2, lineVisible: false, axisLabelVisible: false })
+    const slLine = candles.createPriceLine({ price: 0, color: '#512da8', lineWidth: 1, lineStyle: 2, lineVisible: false, axisLabelVisible: false })
+    const tp1Line = candles.createPriceLine({ price: 0, color: '#fbc02d', lineWidth: 1, lineStyle: 2, lineVisible: false, axisLabelVisible: false })
 
+    let emaSeries = null
     if (emaPeriod) {
-      const emaData = computeEma(data, emaPeriod)
-      if (emaData.length > 0) {
-        const emaSeries = chart.addSeries(LineSeries, {
-          color: '#ff9800',
-          lineWidth: 2,
-          priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
-          priceLineVisible: false,
-          lastValueVisible: true,
-          crosshairMarkerVisible: true,
-        })
-        emaSeries.setData(emaData)
-      }
+      emaSeries = chart.addSeries(LineSeries, {
+        color: '#ff9800',
+        lineWidth: 2,
+        priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: true,
+      })
     }
 
+    let kSeries = null
+    let dSeries = null
     if (stochastic) {
-      const { period, smoothK, smoothD } = stochastic
-      const { k, d } = computeStochastic(data, period, smoothK, smoothD)
-      if (k.length > 0) {
-        const kSeries = chart.addSeries(LineSeries, {
-          color: '#2962ff', lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
-          crosshairMarkerVisible: true, title: `%K ${period}`,
-          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-          autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
-        }, 1)
-        kSeries.setData(k)
-        kSeries.createPriceLine({ price: 80, color: '#94a3b8', lineWidth: 1, lineStyle: 2, axisLabelVisible: false })
-        kSeries.createPriceLine({ price: 20, color: '#94a3b8', lineWidth: 1, lineStyle: 2, axisLabelVisible: false })
+      kSeries = chart.addSeries(LineSeries, {
+        color: '#2962ff', lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+        crosshairMarkerVisible: true, title: `%K ${stochastic.period}`,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+        autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+      }, 1)
+      kSeries.createPriceLine({ price: 80, color: '#94a3b8', lineWidth: 1, lineStyle: 2, axisLabelVisible: false })
+      kSeries.createPriceLine({ price: 20, color: '#94a3b8', lineWidth: 1, lineStyle: 2, axisLabelVisible: false })
 
-        if (d.length > 0) {
-          const dSeries = chart.addSeries(LineSeries, {
-            color: '#f97316', lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
-            crosshairMarkerVisible: true, title: `%D ${smoothD}`,
-            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-          }, 1)
-          dSeries.setData(d)
-        }
+      dSeries = chart.addSeries(LineSeries, {
+        color: '#f97316', lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+        crosshairMarkerVisible: true, title: `%D ${stochastic.smoothD}`,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      }, 1)
 
-        chart.panes()[1]?.setHeight(Math.round(height * 0.4))
-      }
+      chart.panes()[1]?.setHeight(Math.round(height * 0.4))
     }
 
-    chart.timeScale().fitContent()
+    seriesRef.current = { candles, tp1Zone, slZone, entryLine, slLine, tp1Line, emaSeries, kSeries, dSeries }
 
     const onResize = () => chart.applyOptions({ width: containerRef.current.clientWidth })
     window.addEventListener('resize', onResize)
@@ -169,8 +161,49 @@ export function CandlestickChart({ data, entry, sl, tp1, emaPeriod, stochastic, 
     return () => {
       window.removeEventListener('resize', onResize)
       chart.remove()
+      chartRef.current = null
+      seriesRef.current = {}
     }
-  }, [data, entry, sl, tp1, emaPeriod, stochastic, height])
+  }, [height, !!emaPeriod, !!stochastic])
+
+  // Empuja los datos nuevos al chart YA existente (setData/applyOptions en
+  // vez de recrearlo) — así una vela nueva por polling o un re-render del
+  // padre no le mueve el zoom/pan al usuario. fitContent() (encuadrar todo)
+  // solo se dispara la primera vez que llegan datos, no en cada actualización.
+  useEffect(() => {
+    const s = seriesRef.current
+    if (!s.candles || !data || data.length === 0) return
+
+    s.candles.setData(data)
+    s.tp1Zone.setData(tp1 != null ? data.map(c => ({ time: c.time, value: tp1 })) : [])
+    s.slZone.setData(sl != null ? data.map(c => ({ time: c.time, value: sl })) : [])
+    s.tp1Zone.applyOptions({ baseValue: { type: 'price', price: entry } })
+    s.slZone.applyOptions({ baseValue: { type: 'price', price: entry } })
+
+    const setLine = (line, price, color) => {
+      if (!line) return
+      line.applyOptions({ price: price ?? 0, color, lineVisible: price != null, axisLabelVisible: price != null })
+    }
+    setLine(s.entryLine, entry, '#3b82f6')
+    setLine(s.slLine, sl, '#512da8')
+    setLine(s.tp1Line, tp1, '#fbc02d')
+
+    if (s.emaSeries) {
+      s.emaSeries.setData(emaPeriod ? computeEma(data, emaPeriod) : [])
+    }
+
+    if (s.kSeries && stochastic) {
+      const { period, smoothK, smoothD } = stochastic
+      const { k, d } = computeStochastic(data, period, smoothK, smoothD)
+      s.kSeries.setData(k)
+      s.dSeries.setData(d)
+    }
+
+    if (!hasFitRef.current) {
+      chartRef.current?.timeScale().fitContent()
+      hasFitRef.current = true
+    }
+  }, [data, entry, sl, tp1, emaPeriod, stochastic])
 
   return <div ref={containerRef} className="w-full" />
 }

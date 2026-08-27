@@ -98,7 +98,7 @@ function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
     const intervalToggle = (
         <div className="flex justify-end mb-2">
             <div className="flex items-center bg-gray-100 dark:bg-slate-800 rounded-lg p-0.5">
-                {['1h', '4h'].map(iv => (
+                {['1h', '4h', '1d'].map(iv => (
                     <button
                         key={iv}
                         type="button"
@@ -547,7 +547,7 @@ const COLUMNS = [
     { key: "markPrice",        label: "Precio actual"  },
     { key: "unrealizedPNL",    label: "P&L no real."   },
     { key: "leverage",         label: "Apalancamiento" },
-    { key: "candles4h",       label: "Velas 4H"       },
+    { key: "candles1d",       label: "Velas 1D / Alertas" },
     { key: "margin",           label: "Margen"         },
     { key: "createTime",       label: "Apertura"       },
 ];
@@ -557,20 +557,53 @@ const ENDPOINTS = [
     "/api/bitunix/api/v1/futures/trade/get_pending_orders",
 ];
 
-// Umbral de velas de 4H para remarcar visualmente una posición que lleva mucho
-// tiempo abierta (ver columna "Velas 4H") — el cierre ya no es automático, sólo
+// Umbral de velas de 1D para remarcar visualmente una posición que lleva mucho
+// tiempo abierta (ver columna "Velas 1D") — el cierre ya no es automático, sólo
 // una señal visual para que se decida manualmente.
 const STALE_CANDLES_THRESHOLD = 15;
-const CANDLE_4H_MS = 4 * 3600 * 1000;
+const CANDLE_1D_MS = 24 * 3600 * 1000;
 
-// Velas de 4H transcurridas desde la apertura, alineadas a la rejilla real de
-// velas (UTC 00/04/08/12/16/20) en vez de un simple cociente de tiempo —
-// dividir el tiempo transcurrido entre 4h subcuenta cuando la apertura no cae
-// justo en un límite de vela (ej. abrir a las 05:34 ya está dentro de la vela
-// 04:00-08:00, no a la mitad de un período de 4h contado desde ese momento).
-function candlesElapsed4h(openTimeMs) {
-    const openCandleStart = Math.floor(openTimeMs / CANDLE_4H_MS) * CANDLE_4H_MS;
-    return Math.floor((Date.now() - openCandleStart) / CANDLE_4H_MS);
+// ─── alertas manuales por vela (1H / 4H / 1D) ─────────────────────────────────
+// Configuración manual, por posición (símbolo), de qué temporalidades avisan
+// cuando se abre una nueva vela — un recordatorio para revisar la posición.
+// Se activa/desactiva desde los chips 1H/4H/1D dentro de la columna "Velas 1D".
+// Persistida en localStorage para que sobreviva a refrescos de la página.
+const ALERT_CONFIG_KEY = "bitunix_alert_config";
+const ALERT_LAST_KEY   = "bitunix_alert_last_notified";
+const ALERT_TIMEFRAMES = ["1h", "4h", "1d"];
+const ALERT_CANDLE_MS  = { "1h": 3600_000, "4h": 4 * 3600_000, "1d": CANDLE_1D_MS };
+
+// Velas de la temporalidad `tf` transcurridas desde la apertura, alineadas a
+// la rejilla real de velas (UTC 00:00 para 1D, etc.) en vez de un simple
+// cociente de tiempo — dividir el tiempo transcurrido entre el tamaño de vela
+// subcuenta cuando la apertura no cae justo en un límite de vela (ej. abrir a
+// las 05:34 ya está dentro de la vela del día que arrancó a las 00:00, no a
+// la mitad de un período de 24h contado desde ese momento).
+function candlesElapsedTf(tf, openTimeMs) {
+    const ms = ALERT_CANDLE_MS[tf];
+    const openCandleStart = Math.floor(openTimeMs / ms) * ms;
+    return Math.floor((Date.now() - openCandleStart) / ms);
+}
+
+function loadJson(key, fallback) {
+    if (typeof window === "undefined") return fallback;
+    try {
+        const raw = window.localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function saveJson(key, value) {
+    try { window.localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+
+// Inicio de la vela actual de una temporalidad, alineado a la rejilla real
+// (00:00 UTC para 1D, etc.) — igual criterio que candlesElapsedTf.
+function candleStart(tf, nowMs) {
+    const ms = ALERT_CANDLE_MS[tf];
+    return Math.floor(nowMs / ms) * ms;
 }
 
 function extractList(json) {
@@ -604,7 +637,77 @@ export default function BitunixPage() {
     const [symbol,     setSymbol]     = useState("");
     const [endpoint,   setEndpoint]   = useState(ENDPOINTS[0]);
     const [usedUrl,    setUsedUrl]    = useState("");
+    const [alertConfig,     setAlertConfig]     = useState({});   // { [symbol]: { "1h": bool, "4h": bool, "1d": bool } }
+    const [notifPermission, setNotifPermission] = useState("default");
     const symbolRef = useRef("");
+    const alertLastRef = useRef({});   // { [symbol]: { [tf]: candleStartMs ya notificado } }
+
+    // Carga config/estado de alertas guardado (localStorage sólo existe en el cliente)
+    useEffect(() => {
+        setAlertConfig(loadJson(ALERT_CONFIG_KEY, {}));
+        alertLastRef.current = loadJson(ALERT_LAST_KEY, {});
+        if (typeof Notification !== "undefined") setNotifPermission(Notification.permission);
+        else setNotifPermission("unsupported");
+    }, []);
+
+    const requestNotifPermission = () => {
+        if (typeof Notification === "undefined") return;
+        Notification.requestPermission().then(setNotifPermission);
+    };
+
+    // Activa/desactiva la alerta de "nueva vela" de una temporalidad para un símbolo.
+    const toggleAlert = (sym, tf) => {
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+            Notification.requestPermission().then(setNotifPermission);
+        }
+        setAlertConfig(prev => {
+            const current = prev[sym] || {};
+            const next = { ...prev, [sym]: { ...current, [tf]: !current[tf] } };
+            saveJson(ALERT_CONFIG_KEY, next);
+            return next;
+        });
+    };
+
+    // Revisa cada 15s si alguna temporalidad con alerta activa entró a una vela
+    // nueva; si es así, dispara una notificación de navegador. La primera vez
+    // que se activa una alerta sólo se toma como línea base (no notifica de
+    // inmediato) — únicamente notifica en el CAMBIO de vela.
+    useEffect(() => {
+        const check = () => {
+            const now = Date.now();
+            let changed = false;
+            const nextLast = { ...alertLastRef.current };
+            for (const [sym, tfs] of Object.entries(alertConfig)) {
+                for (const tf of ALERT_TIMEFRAMES) {
+                    if (!tfs?.[tf]) continue;
+                    const cStart = candleStart(tf, now);
+                    const last = nextLast[sym]?.[tf];
+                    if (last === undefined) {
+                        nextLast[sym] = { ...(nextLast[sym] || {}), [tf]: cStart };
+                        changed = true;
+                        continue;
+                    }
+                    if (last !== cStart) {
+                        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+                            new Notification(`Nueva vela ${tf.toUpperCase()} · ${sym}`, {
+                                body: `Se abrió una nueva vela de ${tf.toUpperCase()} para ${sym}. Revisa la posición.`,
+                                tag:  `${sym}-${tf}-${cStart}`,
+                            });
+                        }
+                        nextLast[sym] = { ...(nextLast[sym] || {}), [tf]: cStart };
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) {
+                alertLastRef.current = nextLast;
+                saveJson(ALERT_LAST_KEY, nextLast);
+            }
+        };
+        check();
+        const id = setInterval(check, 15_000);
+        return () => clearInterval(id);
+    }, [alertConfig]);
 
     const fetchPositions = useCallback(async (ep) => {
         const url = ep || endpoint;
@@ -688,10 +791,10 @@ export default function BitunixPage() {
                 const vb = (b[sortKey] || "").toLowerCase();
                 return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
             }
-            // "Velas 4H" es un valor calculado (no un campo crudo de la posición) — se
+            // "Velas 1D" es un valor calculado (no un campo crudo de la posición) — se
             // ordena por el mismo openTime del que se deriva (más velas transcurridas
             // == apertura más antigua).
-            if (sortKey === "candles4h") {
+            if (sortKey === "candles1d") {
                 const ta = Number(pick(a, "createTime","openTime","ctime","createdAt","createTimestamp","time")) || 0;
                 const tb = Number(pick(b, "createTime","openTime","ctime","createdAt","createTimestamp","time")) || 0;
                 return sortDir === "asc" ? ta - tb : tb - ta;
@@ -737,18 +840,33 @@ export default function BitunixPage() {
                             )}
                         </p>
                     </div>
-                    <button
-                        onClick={() => fetchPositions()}
-                        disabled={loading}
-                        className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 text-gray-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-medium text-sm px-4 py-2 rounded-xl transition-colors shadow-sm disabled:opacity-50"
-                    >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
-                            strokeLinecap="round" strokeLinejoin="round"
-                            className={loading ? "animate-spin" : ""}>
-                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                        </svg>
-                        {loading ? "Actualizando…" : "Actualizar"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {notifPermission === "default" && (
+                            <button
+                                onClick={requestNotifPermission}
+                                className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900 font-medium text-sm px-4 py-2 rounded-xl transition-colors shadow-sm"
+                            >
+                                🔔 Activar notificaciones
+                            </button>
+                        )}
+                        {notifPermission === "denied" && (
+                            <span className="text-xs text-red-400 dark:text-red-500" title="Las notificaciones están bloqueadas en el navegador para este sitio">
+                                🔕 Notificaciones bloqueadas
+                            </span>
+                        )}
+                        <button
+                            onClick={() => fetchPositions()}
+                            disabled={loading}
+                            className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 text-gray-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-medium text-sm px-4 py-2 rounded-xl transition-colors shadow-sm disabled:opacity-50"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+                                strokeLinecap="round" strokeLinejoin="round"
+                                className={loading ? "animate-spin" : ""}>
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            {loading ? "Actualizando…" : "Actualizar"}
+                        </button>
+                    </div>
                 </div>
 
                 {endpoint === ENDPOINTS[0] && validPnls.length > 0 && (
@@ -867,9 +985,15 @@ export default function BitunixPage() {
                                                 const lev        = pick(o, "leverage","lever","lev");
                                                 const margin     = pick(o, "margin","initialMargin","positionMargin","im","posMargin","frozenMargin");
                                                 const openTime   = pick(o, "createTime","openTime","ctime","createdAt","createTimestamp","time");
-                                                const candles4h  = openTime != null
-                                                    ? candlesElapsed4h(Number(openTime))
-                                                    : null;
+
+                                                // Temporalidades a mostrar en la columna: una por cada chip 1H/4H/1D
+                                                // activo para este símbolo; si no hay ninguna activa, se muestra 1D
+                                                // por defecto (comportamiento original de "Velas 1D").
+                                                const activeTfs = ALERT_TIMEFRAMES.filter(tf => alertConfig[o.symbol]?.[tf]);
+                                                const displayTfs = activeTfs.length > 0 ? activeTfs : ["1d"];
+                                                const candleCounts = openTime != null
+                                                    ? displayTfs.map(tf => ({ tf, count: candlesElapsedTf(tf, Number(openTime)) }))
+                                                    : [];
 
                                                 return (
                                                     <Fragment key={rowId}>
@@ -894,19 +1018,54 @@ export default function BitunixPage() {
                                                             <td className="px-4 py-3 text-gray-500 dark:text-slate-400 whitespace-nowrap text-center">
                                                                 {lev ? `${lev}×` : "—"}
                                                             </td>
-                                                            <td className="px-4 py-3 whitespace-nowrap text-center">
-                                                                {candles4h != null && candles4h >= 0 ? (
-                                                                    <span
-                                                                        title={candles4h >= STALE_CANDLES_THRESHOLD
-                                                                            ? `${candles4h} velas 4H — supera el umbral de ${STALE_CANDLES_THRESHOLD}, considera cerrar manualmente`
-                                                                            : `${candles4h} velas 4H`}
-                                                                        className={candles4h >= STALE_CANDLES_THRESHOLD
-                                                                            ? "inline-flex items-center gap-1 font-mono text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 animate-pulse"
-                                                                            : "font-mono text-orange-400 text-xs"}
-                                                                    >
-                                                                        {candles4h >= STALE_CANDLES_THRESHOLD && "⚠ "}{candles4h}
-                                                                    </span>
-                                                                ) : "—"}
+                                                            <td className="px-4 py-3 whitespace-nowrap text-center"
+                                                                onClick={e => e.stopPropagation()}>
+                                                                <div className="flex flex-col items-center gap-1.5">
+                                                                    {candleCounts.length > 0 ? (
+                                                                        <div className="flex flex-wrap items-center justify-center gap-1">
+                                                                            {candleCounts.map(({ tf, count }) => {
+                                                                                // El umbral de "posición vieja" sólo aplica a 1D (15 velas
+                                                                                // ≈ 15 días); en 1H/4H el conteo es solo informativo.
+                                                                                const stale = tf === "1d" && count >= STALE_CANDLES_THRESHOLD;
+                                                                                return count >= 0 ? (
+                                                                                    <span
+                                                                                        key={tf}
+                                                                                        title={stale
+                                                                                            ? `${count} velas ${tf.toUpperCase()} — supera el umbral de ${STALE_CANDLES_THRESHOLD}, considera cerrar manualmente`
+                                                                                            : `${count} velas ${tf.toUpperCase()}`}
+                                                                                        className={stale
+                                                                                            ? "inline-flex items-center gap-1 font-mono text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 animate-pulse"
+                                                                                            : "inline-flex items-center gap-1 font-mono text-orange-400 text-xs"}
+                                                                                    >
+                                                                                        {stale && "⚠ "}{count} {tf.toUpperCase()}
+                                                                                    </span>
+                                                                                ) : null;
+                                                                            })}
+                                                                        </div>
+                                                                    ) : "—"}
+
+                                                                    {/* Alertas manuales de nueva vela por temporalidad */}
+                                                                    <div className="flex items-center gap-1">
+                                                                        {ALERT_TIMEFRAMES.map(tf => {
+                                                                            const active = !!alertConfig[o.symbol]?.[tf];
+                                                                            return (
+                                                                                <button
+                                                                                    key={tf}
+                                                                                    type="button"
+                                                                                    onClick={() => toggleAlert(o.symbol, tf)}
+                                                                                    title={`${active ? "Desactivar" : "Activar"} alerta de nueva vela ${tf.toUpperCase()} para ${o.symbol}`}
+                                                                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border transition-colors ${
+                                                                                        active
+                                                                                            ? "bg-indigo-500 border-indigo-500 text-white"
+                                                                                            : "bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-700 text-gray-400 dark:text-slate-500 hover:border-indigo-300 dark:hover:border-indigo-600"
+                                                                                    }`}
+                                                                                >
+                                                                                    {tf.toUpperCase()}
+                                                                                </button>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
                                                             </td>
                                                             <td className="px-4 py-3 text-gray-500 dark:text-slate-400 tabular-nums whitespace-nowrap">
                                                                 {margin ? `$${fmt(margin)}` : "—"}

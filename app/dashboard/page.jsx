@@ -10,7 +10,7 @@ function loadHistory() {
 }
 
 function upsertSnapshot(equity) {
-    const d    = new Date().toISOString().slice(0, 10)
+    const d    = cdmxDateStr()
     const hist = loadHistory()
     const idx  = hist.findIndex(e => e.date === d)
     if (idx >= 0) hist[idx].equity = equity
@@ -22,11 +22,33 @@ function upsertSnapshot(equity) {
 }
 
 // ── date helpers ──────────────────────────────────────────────
-function mondayOf(date) {
-    const d   = new Date(date)
-    const day = d.getDay() // 0=Dom..6=Sáb
-    d.setDate(d.getDate() + (day === 0 ? -6 : 1) - day)
-    return d.toISOString().slice(0, 10)
+// "Hoy" en hora de CDMX (America/Mexico_City), sin importar la zona horaria
+// del runtime que ejecuta el código. Antes se usaba new Date().toISOString()
+// (calendario UTC), que en CDMX (UTC-6) va un día adelantado respecto al
+// calendario local durante las 18:00–23:59 — esa ventana hacía que "hoy" (y,
+// en cascada, el lunes de la semana) se calculara un día de más.
+function cdmxDateStr(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(date).reduce((acc, p) => (acc[p.type] = p.value, acc), {})
+    return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+// Suma/resta días a una fecha 'YYYY-MM-DD' operando solo con componentes de
+// fecha vía Date.UTC — nunca pasa por una zona horaria local, así que no
+// puede correrse un día por un redondeo de huso horario.
+function addDaysToDateStr(dateStr, days) {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const utc = new Date(Date.UTC(y, m - 1, d))
+    utc.setUTCDate(utc.getUTCDate() + days)
+    return utc.toISOString().slice(0, 10)
+}
+
+// Lunes de la semana que contiene `dateStr` ('YYYY-MM-DD').
+function mondayOf(dateStr) {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay() // 0=Dom..6=Sáb
+    return addDaysToDateStr(dateStr, (day === 0 ? -6 : 1) - day)
 }
 
 // ── market hours (CDMX) ────────────────────────────────────────
@@ -101,19 +123,17 @@ const pBg    = v => v == null ? '' : v > 0 ? 'bg-green-50 dark:bg-green-950 bord
 function computeMetrics(history, equity) {
     if (!history.length || equity == null) return {}
     const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
-    const today  = new Date().toISOString().slice(0, 10)
+    const today  = cdmxDateStr()
     const month  = today.slice(0, 7)
 
     const yesterday = sorted.filter(e => e.date < today).at(-1)
     const firstMon  = sorted.find(e => e.date.startsWith(month))
 
-    const d30 = new Date(); d30.setDate(d30.getDate() - 30)
-    const base30 = sorted.find(e => e.date >= d30.toISOString().slice(0, 10)) ?? sorted[0]
+    const cutoff30 = addDaysToDateStr(today, -30)
+    const base30   = sorted.find(e => e.date >= cutoff30) ?? sorted[0]
 
-    const monday    = mondayOf(new Date())
-    const fridayDt  = new Date(`${monday}T00:00:00`)
-    fridayDt.setDate(fridayDt.getDate() + 4)
-    const friday    = fridayDt.toISOString().slice(0, 10)
+    const monday    = mondayOf(today)
+    const friday    = addDaysToDateStr(monday, 4)
     const firstWeek = sorted.find(e => e.date >= monday && e.date <= friday)
 
     return {
@@ -334,18 +354,18 @@ export default function DashboardPage() {
     const pct = (pnl, base) =>
         base && base > 0 && pnl != null ? `(${fmtS((pnl / base) * 100, 2)}%)` : null
 
-    const now    = new Date()
-    const month  = now.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
-    const monthN = now.toLocaleDateString('es-MX', { month: 'long' })
+    const todayStr = cdmxDateStr()
+    const todayUTC = new Date(`${todayStr}T00:00:00Z`)
+    const month  = todayUTC.toLocaleDateString('es-MX', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    const monthN = todayUTC.toLocaleDateString('es-MX', { month: 'long', timeZone: 'UTC' })
 
-    const monday      = mondayOf(now)
-    const fridayDt    = new Date(`${monday}T00:00:00`)
-    fridayDt.setDate(fridayDt.getDate() + 4)
-    const weekRangeFmt = d => d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })
-    const weekLabel    = `${weekRangeFmt(new Date(`${monday}T00:00:00`))} – ${weekRangeFmt(fridayDt)}`
+    const monday       = mondayOf(todayStr)
+    const fridayStr     = addDaysToDateStr(monday, 4)
+    const weekRangeFmt = dateStr => new Date(`${dateStr}T00:00:00Z`)
+        .toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+    const weekLabel    = `${weekRangeFmt(monday)} – ${weekRangeFmt(fridayStr)}`
 
-    const d30ago = new Date(); d30ago.setDate(d30ago.getDate() - 30)
-    const cutoff = d30ago.toISOString().slice(0, 10)
+    const cutoff = addDaysToDateStr(todayStr, -30)
     const hist30 = history.filter(e => e.date >= cutoff)
     const pnlSer = buildPnlSeries(hist30)
     const monthly = buildMonthlyMap(history)
