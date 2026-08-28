@@ -6,16 +6,63 @@
 
 export const DISPLAY_APEX_DAYS     = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // qué se muestra en los resultados de las páginas de patrones
 export const BACKTEST_APEX_DAYS    = [10]; // registro en el log de backtesting
-export const AUTO_INITIAL_LEVERAGE = 2;
-export const AUTO_MAX_LEVERAGE     = 10;
+export const AUTO_MAX_LEVERAGE     = 20; // tope al que se escala si Bitunix rechaza la orden (no configurable)
 export const DEFAULT_TRADE_AMOUNT_USDT = 20;
 export const DEFAULT_AUTO_TRADE_APEX_DAYS = 10; // mismo valor que el TARGET_APEX_DAYS fijo anterior
 export const MIN_AUTO_TRADE_APEX_DAYS = 1;
 export const MAX_AUTO_TRADE_APEX_DAYS = 20;
+export const DEFAULT_AUTO_TRADE_LEVERAGE = 2;
+export const MIN_AUTO_TRADE_LEVERAGE = 1;
+export const MAX_AUTO_TRADE_LEVERAGE = AUTO_MAX_LEVERAGE; // no tiene sentido arrancar más arriba del tope de escalada
 
 const TRADE_AMOUNT_LS_KEY   = 'trading_auto_trade_amount_usdt';
 const AUTO_TRADE_ENABLED_LS_KEY = 'trading_auto_trade_enabled';
 const AUTO_TRADE_APEX_DAYS_LS_KEY = 'trading_auto_trade_apex_days';
+const AUTO_TRADE_LEVERAGE_LS_KEY = 'trading_auto_trade_leverage';
+
+// ─── Precisión de cantidad por símbolo ──────────────────────────────────────
+// Antes la cantidad se formateaba con un heurístico genérico
+// (qty.toFixed(qty<1?6:qty<100?4:2)) que asume la precisión sin consultarla.
+// Bitunix expone la precisión real por contrato (basePrecision, decimales
+// permitidos — puede ser 0, es decir solo enteros) y el mínimo operable
+// (minTradeVolume) vía /market/trading_pairs. Para activos de precio muy bajo
+// (ej. MANTRA: basePrecision=0) el heurístico manda una cantidad con
+// decimales que Bitunix no acepta — la orden se rechaza en cada intento de
+// apalancamiento (mismo motivo, mismo rechazo) y la posición nunca se abre,
+// aunque el hallazgo ya haya quedado registrado en el log de backtesting
+// (que es independiente de si la orden real se colocó o no).
+const qtyPrecisionCache = new Map(); // symbolPair -> { precision, minQty }
+
+async function getQtyPrecision(symbolPair) {
+    if (qtyPrecisionCache.has(symbolPair)) return qtyPrecisionCache.get(symbolPair);
+
+    let info = { precision: 4, minQty: 0 }; // fallback conservador si falla la consulta
+    try {
+        const res  = await fetch(`/api/bitunix/api/v1/futures/market/trading_pairs?symbols=${symbolPair}`);
+        const json = await res.json();
+        const pair = json?.data?.[0];
+        if (pair) {
+            info = {
+                precision: Number.isFinite(Number(pair.basePrecision)) ? Number(pair.basePrecision) : 4,
+                minQty:    parseFloat(pair.minTradeVolume ?? 0) || 0,
+            };
+        }
+    } catch (e) {
+        console.error(`[Qty] No se pudo consultar la precisión de ${symbolPair}, usando fallback:`, e);
+    }
+    qtyPrecisionCache.set(symbolPair, info);
+    return info;
+}
+
+// Formatea `qty` con la precisión real de Bitunix para `symbolPair`. Devuelve
+// null si, redondeada, la cantidad queda por debajo del mínimo operable — en
+// vez de mandar una orden que Bitunix va a rechazar igual.
+export async function formatQtyForSymbol(symbolPair, qty) {
+    const { precision, minQty } = await getQtyPrecision(symbolPair);
+    const rounded = Number(qty.toFixed(precision));
+    if (!(rounded > 0) || (minQty > 0 && rounded < minQty)) return null;
+    return rounded.toFixed(precision);
+}
 
 // Monto fijo (en USDT) a usar en cada apertura automática. Persistido en
 // localStorage — se mantiene hasta que el usuario lo cambie manualmente desde
@@ -62,6 +109,26 @@ export function setAutoTradeApexDays(days) {
     const n = parseInt(days, 10);
     if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS)
         localStorage.setItem(AUTO_TRADE_APEX_DAYS_LS_KEY, String(n));
+}
+
+// Apalancamiento inicial (1-10) para aperturas automáticas Y para el modal
+// manual de "Abrir posición" (ver OpenPositionModal en patrones/page.jsx y
+// patrones-1h/page.jsx). Si Bitunix rechaza la orden, se sigue escalando
+// hasta AUTO_MAX_LEVERAGE igual que antes — esto solo cambia dónde arranca
+// esa escalada. Persistido en localStorage — se mantiene hasta que el
+// usuario lo cambie manualmente desde el campo de texto en esas páginas.
+export function getAutoTradeLeverage() {
+    if (typeof window === 'undefined') return DEFAULT_AUTO_TRADE_LEVERAGE;
+    const n = parseInt(localStorage.getItem(AUTO_TRADE_LEVERAGE_LS_KEY), 10);
+    return Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE
+        ? n : DEFAULT_AUTO_TRADE_LEVERAGE;
+}
+
+export function setAutoTradeLeverage(leverage) {
+    if (typeof window === 'undefined') return;
+    const n = parseInt(leverage, 10);
+    if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE)
+        localStorage.setItem(AUTO_TRADE_LEVERAGE_LS_KEY, String(n));
 }
 
 // Usado para decidir la apertura automática — ápice configurable (ver getAutoTradeApexDays).
@@ -143,7 +210,7 @@ async function placeAutoOrder({ symbolPair, isBull, sl, tp1, qtyStr }) {
         return { ok, data: { step: "place_order", leverage: lev, ...data } };
     };
 
-    let lev    = AUTO_INITIAL_LEVERAGE;
+    let lev    = getAutoTradeLeverage();
     let result = await attempt(lev);
     while (!result.ok && lev < AUTO_MAX_LEVERAGE) {
         lev += 1;
@@ -184,8 +251,9 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
             return { opened: false, reason: 'already_open' };
         }
 
-        const capital = getTradeAmount(); // monto configurado = margen objetivo, no el nocional
-        console.log(`[AutoTrade] ${symbolPair}: monto/operación configurado = $${capital} (margen objetivo @ ${AUTO_INITIAL_LEVERAGE}×)`);
+        const capital  = getTradeAmount();      // monto configurado = margen objetivo, no el nocional
+        const leverage = getAutoTradeLeverage();
+        console.log(`[AutoTrade] ${symbolPair}: monto/operación configurado = $${capital} (margen objetivo @ ${leverage}×)`);
         const balance = await fetchAvailableBalance();
         if (capital > balance) {
             console.log(`[AutoTrade] ${symbolPair}: monto configurado ($${capital}) excede el saldo disponible ($${balance.toFixed(2)}), se omite.`);
@@ -195,10 +263,14 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
         // El monto configurado es el margen que se quiere comprometer — el nocional
         // (y por lo tanto qty) se calcula multiplicando por el apalancamiento inicial,
         // así margen = nocional ÷ apalancamiento = capital, en vez de capital ÷ apalancamiento.
-        const notional = capital * AUTO_INITIAL_LEVERAGE;
+        const notional = capital * leverage;
         const qty = levels.entry > 0 ? notional / levels.entry : 0;
         if (!(qty > 0)) return { opened: false, reason: 'invalid_qty' };
-        const qtyStr  = qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2);
+        const qtyStr = await formatQtyForSymbol(symbolPair, qty);
+        if (!qtyStr) {
+            console.log(`[AutoTrade] ${symbolPair}: cantidad calculada (${qty}) queda por debajo del mínimo operable de Bitunix para este símbolo, se omite.`);
+            return { opened: false, reason: 'qty_below_minimum' };
+        }
 
         const order = await placeAutoOrder({
             symbolPair, isBull, sl: levels.sl, tp1: levels.tp1, qtyStr,

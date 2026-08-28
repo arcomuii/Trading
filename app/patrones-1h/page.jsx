@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
-import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS } from "../lib/autoTrade";
+import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS, getAutoTradeLeverage, setAutoTradeLeverage, DEFAULT_AUTO_TRADE_LEVERAGE, MIN_AUTO_TRADE_LEVERAGE, MAX_AUTO_TRADE_LEVERAGE, formatQtyForSymbol } from "../lib/autoTrade";
 import { logBacktestEntry } from "../lib/backtestLog";
 import { CandlestickChart } from "../../components/CandlestickChart";
 
@@ -32,7 +32,7 @@ function msUntilNextHalfHour() {
 // pueda ofrecer el mismo universo de símbolos sin duplicar la lista.
 export const BITUNIX_TICKERS = [
     //"BNB", "XLM", "XMR", "CC", "LINK", "LAB", "HBAR", "AVAX", "SUI", "XAUT", "TAO", "PAXG", "ASTER", "OKB", "WLD", "ONDO", "MNT", "AAVE", "ICP", "MORPHO", "ETC", "DEXE", "QNT", "STABLE", "ATOM", "RENDER", "ALGO", "BEAT", "KAS", "JST", "ENA", "VELVET", "VVV", "APT", "INJ", "AERO", "CAKE", "LIT", "DASH", "JTO", "FET", "VET", "PENGU", "VIRTUAL", "TIA", "XRP", "GWEI", "SUN", "GRASS", "ETHFI", "STX", "SPX", "PYTH", "BSV", "XPL", "FRAX", "ZBCN", "MON", "2Z", "PIEVERSE", "JASMY", "UB", "PENDLE", "LDO", "ZRO", "STRK", "GRT", "FF", "DOGE", "CHZ", "WIF", "AXS", "EIGEN", "RAY", "ENS", "SYRUP", "IOTA", "COMP", "TWT", "KAITO", "SKYAI", "NEO", "DYDX", "THETA", "MANA", "BAT", "SAND", "BAS", "AR", "GALA", "BILL", "SFP", "TAC", "TAG", "AWE", "IMX", "CVX", "ZK", "A", "KMNO", "GLM", "1INCH", "SENT", "RE", "MET", "ATH", "BANANAS31", "ZEC", "FORM", "MAGMA", "RAVE", "SYN", "LPT", "WAL", "SNX", "EGLD", "ARKM", "GAS", "QTUM", "RSR", "USELESS", "ORCA", "RIVER", "HOME", "RIF", "MELANIA", "ALLO", "Q", "ZRX", "FLUID", "ORDI", "ZAMA", "RVN", "SIREN", "SAFE", "BIO", "SOON", "NMR", "PLUME", "IO", "YFI", "ALCH", "ICNT", "BERA", "ENJ", "ZIL", "JELLYJELLY", "KSM", "GMX", "HOT", "LINEA", "CYS", "ZETA", "BRETT", "SPK", "COAI", "APR", "MINA", "AXL", "POLYX", "IDOL", "ROSE", "DUSK", "0G", "KAVA", "CKB", "BARD", "FLOW", "POPCAT", "ASTR", "ZEREBRO", "XVS", "ESP", "BLUR", "BR", "CELO", "SUSHI", "DEEP", "RED", "MANTA", "GPS", "MOODENG", "TRB", "TRIA", "HUMA", "AZTEC", "SAHARA", "ROBO", "NOT", "KGEN", "PROVE", "XVG", "SQD", "VTHO", "CROSS", "NXPC", "MMT", "MOCA", "ANKR", "MANTRA", "FOGO", "ZEST", "UMA", "VANA", "FOLKS", "AT", "ZORA", "MEW", "TRUTH", "LTC", "RPL", "API3", "USTC", "POWR", "ACX", "AVNT", "SSV", "IRYS", "BOME", "HIVE", "OCEAN", "ICX", "BNT", "CATI", "NOW", "WAVES", "SKR", "REZ", "BAND", "PEOPLE", "ZBT", "OPG", "GIGGLE", "ACU", "COTI", "EUL", "IOST", "NAORIS", "EDU", "MERL", "ETHW", "XAN", "AUCTION", "GMT", "NEAR", "ILV", "STG", "CYBER", "STEEM", "ONG", "CARV", "FIDA", "PUNDIX", "B2", "MTL", "SKL", "ARK", "RLC", "XPIN", "BNX", "CTSI", "LSK", "PROM", "SIGN", "LISTA", "AIXBT", "AGIX", "KNC", "WAXP", "EWT", "BREV", "BCH", "SAPIEN", "LQTY", "YGG", "AEVO", "CTK", "SXT", "MYX", "USUAL", "CGPT", "CVC", "SPELL", "SLP", "LUMIA", "BLUAI", "NIL", "SOMI", "TRX", "CTR", "PIPPIN", "MAGIC", "CETUS", "INX", "YB", "AGLD", "MOVR", "ERA", "WET", "BLESS", "CHR", "BIGTIME", "LAYER", "BICO", "FLOCK", "AIOT", "TA", "HEI", "DOT", "ZKC", "TAIKO", "XNY", "C98", "DIA", "ENSO", "LA", "OG", "XAI", "BLEND", "DOLO", "PARTI", "TNSR", "KERNEL", "HMSTR", "DOOD", "ON", "FIL", "STORJ", "GUN", "RAD", "CELR", "PORTAL", "NEWT", "STO", "MUBARAK", "OGN", "RARE", "GRIFFAIN", "ELSA", "DRIFT", "TRUST", "MAV", "CHILLGUY", "DYM", "MITO", "AKE", "TUT", "4", "RESOLV", "RECALL", "WCT", "MAVIA", "ARPA", "LYN", "ASR", "HFT", "COOKIE", "GAL", "SWARMS", "VANRY", "TRADOOR", "ANTHROPIC", "TLM", "V", "GTC", "SHELL", "SAGA", "AVA", "AIA", "VIC", "BTR", "TAKE", "ESPORTS", "FHE", "XEM", "EVAA", "HEMI", "MU", "SOLV", "EPIC", "KOMA", "MLN", "TOWNS", "NFP", "BLZ", "ALPINE", "REN", "HAEDAL", "XPT", "COIN", "OPN", "ACT", "OPENAI", "ZKP", "MASK", "SNDK", "FRONT", "XTZ", "PTB", "IOTX", "PRL", "PUMP", "ONT", "DRAM", "KAT", "KITE", "BAN", "T", "PI", "ACE", "CORE", "ID", "FARTCOIN", "UP", "SLX", "UNFI", "PHB", "BABY", "SPACE", "EDEN", "JUP", "DIS", "BMT", "FIGHT", "SOPH", "BOND", "COST", "JOE", "HD", "M", "APEX", "DOGS", "KEY", "S", "ARIA", "TURTLE", "BASED", "ADA", "LOOM", "SPCX", "TURBO", "TST", "AIN", "COS", "XAU", "POL", "MEGA", "UAI", "SONIC", "SOL", "CLO", "HANA", "BTW", "PNUT", "NIGHT", "GUA", "GOAT", "BROCCOLI", "GENIUS", "STMX", "SUPER", "OP", "ZEN", "TREE", "ORCL", "BSB", "TOSHI", "IN", "NOM", "ME", "COMBO", "XPD", "LIGHT", "POWER", "G", "PIXEL", "HOLO", "PROMPT", "BTC", "H", "RUNE", "THE", "TEST", "F", "COW", "COPPER", "CFX", "B", "ANIME", "W", "TON", "OPEN", "MEME", "KAIA", "CLANKER", "C", "SKY", "MSTR", "US", "BANK", "ORBS", "BB", "ARB", "WLFI", "WOO", "TSLA", "DAR", "CHIP", "1000BONK", "ALT", "USAR", "AMD", "INTC", "ZM", "CRCL", "TRUMP", "1000SATS", "SEI", "O", "ARX", "HYPER", "ETH", "AAOI", "CBRS", "METIS", "BIRB", "NBIS", "CRO", "ACH", "HIGH", "STBL", "ALICE", "SMCI", "PLTR", "LITE", "BANANA", "QCOM", "NFLX", "NVDA", "AIO", "MRVL", "CRM", "CRWD", "GOOGL", "MSFT", "CRWV", "SPY", "AMZN", "1000CAT", "BABA", "ASTS", "KLAY", "FLNC", "APE", "AMAT", "HYPE", "AAPL", "GLW", "CRV", "META", "ORDER", "LLY", "COLLECT", "IREN", "EWY", "1MBABYDOGE", "1000SHIB", "RIVN", "MATIC", "JCT", "UNI", "1000RATS", "USO", "INIT", "AVGO", "CFG", "MOVE", "RKLB", "DOG", "BE", "ONE", "QQQ", "ASML", "MIRA", "DELL", "SCR", "1000CHEEMS", "TSM", "FTM",
-    'CELO', 'XMR', 'MORPHO', 'IO', 'REZ', 'CELR', 'POL', 'BERA', 'EUL', 'DOLO', 'SCR', 'WAL', 'ZAMA', 'SPK', '0G', 'MANTA', 'GPS', 'MANTRA', 'VANA', 'ACX', 'WAVES', 'GIGGLE', 'AGIX', 'AEVO', 'CGPT', 'ERA', 'TUT', 'HEMI', 'EDEN', 'TREE', 'G', 'HOLO', 'SKY', 'TRUMP', 'WOO', 'OCEAN', 'COS', 'HBAR', 'SUI', 'DASH', 'KSM', 'BARD', 'RAD', 'AR', 'ZEN', 'MUBARAK', 'ANIME', 'SEI', 'JST', 'LQTY', 'ALICE', 'API3', 'BNB', 'KAVA', 'BLUR', 'TRB', 'SSV', 'CYBER', 'KAITO', 'SFP', 'MET', 'SYN', 'ORCA', 'ORDI', 'ZBT', 'STEEM', 'USUAL', 'STO', 'KEY', 'BTC', 'KAIA', '1000CHEEMS', 'ACH', '1INCH', 'ZRX', 'STORJ', 'SUPER', 'ZEC', 'FIDA', 'OGN', 'ENA', 'EIGEN', 'XVS', 'GMT', 'RESOLV', 'GAL', 'TON', 'PUNDIX', 'VET', 'ETHFI', 'GAS', 'ZIL', 'ICX', 'KNC', 'DIA', 'ALPINE', 'T', 'SOL', 'KLAY', 'GLM', 'RIF', 'ILV', 'AVAX', 'CVX', 'BAND', 'XVG', 'CVC', 'CAKE', 'ETH', 'IMX', 'ONT', 'XRP', 'CHZ', 'RAY', 'ENS', 'ASTR', 'NEAR', 'ID', 'JOE', 'STMX', 'OP', 'BANANA', 'FTM', 'SUN', 'WIF', 'TWT', 'BOME', 'LUMIA', 'RARE', 'WCT', 'XTZ', 'PUMP', 'METIS', '1MBABYDOGE', 
+    'HAEDAL', 'WCT', 'MANTRA', 'OPN', 'F', 'CFG', 'POWR', 'STEEM', 'MORPHO', 'ZEC', 'ETC', 'TIA', 'WLFI', 'CAKE', 'TURBO', 'LINK', 'AEVO', 'CVC', 'DOGS', 'ZRO', 'ENJ', 'ROSE', 'BNT', 'AUCTION', 'DIA', 'XAI', 'GTC', '1000SATS', 'ACH', 'QTUM', 'ATOM', 'RIF', 'ZRX', 'COTI', 'IOST', 'NEAR', 'T', 'RAY', 'AXL', 'VTHO', 'CGPT', 'LA', 'ANKR', 'HEI', 'TNSR', 'COS', 'SOL', '1MBABYDOGE', 'SUN', 'KAT', 'TURTLE', 'AGLD', 'JUP', 'VIRTUAL', 'SAND', '1INCH', 'BLUR', 'SAHARA', 'SIGN', '1000CAT', 'ENS', 'SYRUP', 'TWT', 'LPT', 'CETUS', 'SKY', 'KAITO', 'ZIL', 'GMX', 'HOT', 'CELO', 'ZBT', 'STORJ', 'CELR', 'NEWT', 'NIGHT', 'BANK', 'CHIP', 'APE', 'BERA', 'SUSHI', 'DOGE', 'WIF', 'THETA', 'BIO', 'CKB', 'XVG', 'UMA', 'CYBER', 'KERNEL', 'XTZ', 'WOO', 'TAO', 'ETHFI', 'GMT', 'FIL', 'GUN', 'OGN', 'ZEN', 'EGLD', 'RSR', 'PARTI', 'ARPA', 'ADA', 'PYTH', 'GLM', 'CATI', 'CHZ', 'MAV', 'ILV', 'ONG', 'RESOLV', 'PHB', 'STX', 'STRK', 'AXS', 'CVX', 'GAS', 'NOT', 'ICX', 'REZ', 'YGG', 'HFT', 'ACT', 'BMT', 'ANIME', 'SCR', 'BAT', 'AR', 'SYN', 'LTC', 'SOMI', 'ACE', 'BABY', 'HYPER', 'HBAR', 'ALGO', 'JST', 'XRP', 'GALA', 'ARKM', 'LINEA', 'HUMA', 'PROM', 'WAXP', 'SAPIEN', 'SPELL', 'HMSTR', 'ONT', 'SOPH', 
 ];
 
 
@@ -749,16 +749,18 @@ async function cancellableWait(ms, abortRef) {
 // amount (ver app/lib/autoTrade.js), using the entry/SL/TP1 levels shown on the
 // card. TP/SL are attached to the same order as market-triggered exits
 // (tpOrderType/slOrderType = MARKET) so no separate tpsl order call is needed.
-const INITIAL_LEVERAGE = 2;    // Apalancamiento inicial para todas las posiciones abiertas desde esta pantalla
-const MAX_LEVERAGE     = 10;    // Tope al que se escala si Bitunix rechaza la orden
+const MAX_LEVERAGE = 20;    // Tope al que se escala si Bitunix rechaza la orden (no configurable)
 
 function OpenPositionModal({ coin, result, levels, onClose }) {
     const [balance,  setBalance]  = useState(null);
     const [balErr,   setBalErr]   = useState(null);
     const [status,   setStatus]   = useState("loading"); // loading | idle | sending | success | error
     const [apiResp,  setApiResp]  = useState(null);
-    const [leverage, setLeverage] = useState(INITIAL_LEVERAGE);
-    const [manualLeverage, setManualLeverage] = useState(INITIAL_LEVERAGE);
+    // Apalancamiento inicial configurado (ver app/lib/autoTrade.js) — con el
+    // que arranca esta posición antes de cualquier escalada por rechazo.
+    const initialLeverage = getAutoTradeLeverage();
+    const [leverage, setLeverage] = useState(initialLeverage);
+    const [manualLeverage, setManualLeverage] = useState(initialLeverage);
 
     const sym        = coin.symbol.toUpperCase();
     const symbolPair = `${sym}USDT`;
@@ -800,7 +802,10 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
     // del monto configurado.
     const notional = capital * manualLeverage;
     const qty      = levels.entry > 0 ? notional / levels.entry : null;
-    const qtyStr   = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
+    // Solo para el texto de vista previa antes de confirmar — un estimado, no
+    // lo que se manda de verdad (eso usa formatQtyForSymbol con la precisión
+    // real de Bitunix, dentro de attemptOrder).
+    const qtyDisplay = qty != null ? qty.toFixed(qty < 1 ? 6 : qty < 100 ? 4 : 2) : null;
 
     // Como qty ahora escala con el apalancamiento para mantener el margen fijo en
     // "capital", subir el apalancamiento agranda la posición (y por lo tanto la
@@ -825,6 +830,15 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
         const levOk = levData?.code === 0 || levData?.code === "0";
         if (!levOk) return { ok: false, data: { step: "change_leverage", leverage: lev, ...levData } };
 
+        // Cantidad con la precisión real de Bitunix para este símbolo (no un
+        // heurístico genérico) — evita mandar decimales que Bitunix rechaza
+        // (ej. activos con basePrecision=0, solo enteros) y que harían fallar
+        // la orden en cada intento de apalancamiento sin abrir la posición.
+        const qtyStr = await formatQtyForSymbol(symbolPair, qty);
+        if (!qtyStr) {
+            return { ok: false, data: { step: "qty_precision", symbol: symbolPair, qty, msg: "La cantidad calculada queda por debajo del mínimo operable de Bitunix para este símbolo." } };
+        }
+
         const body = JSON.stringify({
             symbol:      symbolPair,
             side:        isBull ? "BUY" : "SELL",
@@ -845,7 +859,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
         });
         const data = await res.json();
         const ok = data?.code === 0 || data?.code === "0" || data?.data?.orderId;
-        return { ok, data: { step: "place_order", leverage: lev, ...data } };
+        return { ok, data: { step: "place_order", leverage: lev, qty: qtyStr, ...data } };
     };
 
     // Parte del apalancamiento elegido manualmente. Si un intento falla, reintenta
@@ -854,7 +868,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
     // menor margen requerido); otros rechazos (p.ej. precisión de cantidad) fallarán
     // igual en cada intento y se reportan tal cual.
     const handleConfirm = async () => {
-        if (!qtyStr) return;
+        if (qty == null) return;
         setStatus("sending");
         try {
             let lev = manualLeverage;
@@ -977,13 +991,13 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                             <p className="text-sm text-gray-500 dark:text-slate-400 mb-2">
                                 Se ajustará el apalancamiento a <span className="font-bold text-gray-800 dark:text-slate-100">{manualLeverage}×</span> y se enviará una orden{" "}
                                 <span className="font-bold text-gray-800 dark:text-slate-100">MARKET {isBull ? "BUY" : "SELL"}</span> por{" "}
-                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyStr}</span> {sym} (${fmt(notional, 2)} nocional, ${fmt(capital, 2)} margen) a precio de mercado, con TP/SL adjuntos a mercado.
+                                <span className="font-bold text-gray-800 dark:text-slate-100">{qtyDisplay}</span> {sym} (${fmt(notional, 2)} nocional, ${fmt(capital, 2)} margen) a precio de mercado, con TP/SL adjuntos a mercado.
                             </p>
                             <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-5 italic">
                                 La cantidad es una estimación (monto/operación × apalancamiento ÷ precio de entrada). Si Bitunix rechaza la orden, se reintenta subiendo el
-                                apalancamiento ({INITIAL_LEVERAGE}× → {MAX_LEVERAGE}× máx.) antes de reportar el error.
+                                apalancamiento ({initialLeverage}× → {MAX_LEVERAGE}× máx.) antes de reportar el error.
                             </p>
-                            <button onClick={handleConfirm} disabled={status === "sending" || !qtyStr || insufficientBalance}
+                            <button onClick={handleConfirm} disabled={status === "sending" || qty == null || insufficientBalance}
                                 className={`w-full font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 text-white disabled:opacity-60 ${
                                     isBull ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
                                 }`}>
@@ -1001,11 +1015,11 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
                             </div>
                             <p className="font-bold text-gray-800 dark:text-slate-100 text-lg">Orden enviada</p>
                             <p className="text-gray-400 dark:text-slate-500 text-sm mt-1 mb-4">
-                                {qtyStr} {sym} @ mercado · TP1 ${fmt(levels.tp1, dec)} · SL ${fmt(levels.sl, dec)} · {leverage}×
+                                {apiResp?.qty ?? qtyDisplay} {sym} @ mercado · TP1 ${fmt(levels.tp1, dec)} · SL ${fmt(levels.sl, dec)} · {leverage}×
                             </p>
-                            {leverage > INITIAL_LEVERAGE && (
+                            {leverage > initialLeverage && (
                                 <p className="text-[10px] text-amber-500 dark:text-amber-400 -mt-3 mb-4">
-                                    Se subió el apalancamiento a {leverage}× tras un rechazo inicial en {INITIAL_LEVERAGE}×.
+                                    Se subió el apalancamiento a {leverage}× tras un rechazo inicial en {initialLeverage}×.
                                 </p>
                             )}
                             <button onClick={onClose}
@@ -1724,6 +1738,28 @@ export default function PatronesPage() {
         }
     };
 
+    // Apalancamiento inicial (1-10) para aperturas automáticas y para el modal
+    // manual de "Abrir posición" — persistido en localStorage vía
+    // app/lib/autoTrade.js, se mantiene hasta que se cambie manualmente.
+    const [leverage,      setLeverageState] = useState(DEFAULT_AUTO_TRADE_LEVERAGE);
+    const [leverageInput, setLeverageInput] = useState(String(DEFAULT_AUTO_TRADE_LEVERAGE));
+    useEffect(() => {
+        const stored = getAutoTradeLeverage();
+        setLeverageState(stored);
+        setLeverageInput(String(stored));
+    }, []);
+
+    const commitLeverage = () => {
+        const n = parseInt(leverageInput, 10);
+        if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE) {
+            setAutoTradeLeverage(n);
+            setLeverageState(n);
+            setLeverageInput(String(n));
+        } else {
+            setLeverageInput(String(leverage)); // revierte a lo último válido
+        }
+    };
+
     // Contador de generación: cada scan nuevo invalida al anterior de forma
     // permanente (a diferencia de un booleano compartido, no puede "revivir" si se resetea).
     const scanGenRef  = useRef(0);
@@ -2072,6 +2108,22 @@ export default function PatronesPage() {
                                 className="w-10 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
                             />
                             <span className="text-gray-300 dark:text-slate-600">días</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 px-2.5 py-1 rounded-full"
+                               title="Apalancamiento inicial (1-10) para aperturas automáticas y para el modal manual de Abrir posición — se guarda hasta que lo cambies">
+                            <span className="text-gray-400 dark:text-slate-500 font-semibold">Apalancamiento</span>
+                            <input
+                                type="number"
+                                min={MIN_AUTO_TRADE_LEVERAGE}
+                                max={MAX_AUTO_TRADE_LEVERAGE}
+                                step="1"
+                                value={leverageInput}
+                                onChange={e => setLeverageInput(e.target.value)}
+                                onBlur={commitLeverage}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="w-10 bg-transparent outline-none font-mono font-bold text-gray-700 dark:text-slate-200"
+                            />
+                            <span className="text-gray-300 dark:text-slate-600">×</span>
                         </label>
                         <button
                             type="button"

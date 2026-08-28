@@ -10,22 +10,42 @@
 // aquí a mano para que el backtest siga siendo representativo.
 //
 // Este motor corría originalmente sobre velas de 1H (después, brevemente, sobre
-// 5 minutos); ahora corre sobre velas de 4H (ver app/lib/binanceHistory.js).
-// Todas las ventanas expresadas en NÚMERO DE VELAS (CONSOL, POLE, lookback de
-// sweep, recSlice, CUP_LEN, HANDLE_LEN, PRIOR_LEN, WINDOW) se escalan respecto
-// a la línea base original de 1H — ÷4 en vez de ×12, porque cada vela de 4H
-// cubre 4× más tiempo que una de 1H en vez de 12× menos — para seguir
-// cubriendo el mismo lapso real de tiempo que antes. Donde la división no da
-// un número entero de velas (recSlice, CUP_LEN) se redondea.
+// 5 minutos; ahora soporta 1H, 4H y 1D — ver app/lib/binanceHistory.js y el
+// selector de intervalo en app/backtest-historico/page.jsx). Todas las
+// funciones reciben `scale` = cuántas "velas de 1H" cubre una vela de este
+// intervalo (1 para 1H, la línea base original; 4 para 4H; 24 para 1D). Las
+// ventanas expresadas en NÚMERO DE VELAS (CONSOL, POLE, lookback de sweep,
+// recSlice, CUP_LEN, HANDLE_LEN, PRIOR_LEN, WINDOW) se dividen ÷windowScale(scale)
+// — normalmente igual a `scale` — para seguir cubriendo el mismo lapso real de
+// tiempo sin importar el intervalo elegido. Donde la división no da un número
+// entero de velas (recSlice, CUP_LEN) se redondea. Con scale=1 todas estas
+// ventanas dan exactamente los valores originales del motor 1H (60, 20, 8, 5,
+// 90, 200...).
 //
-// Sin cambios, y ya sin sentido literal como "días": la conversión "/6" de
-// daysToApex asumía velas de 4H (24h/4h=6) aunque el motor ya corría sobre 1H
-// — se deja igual a propósito (igual que siempre) para que el filtro "ápice a
-// 10 días" del backtest siga siendo el MISMO valor numérico que usa el gate
-// en vivo de patrones-1h, aunque ninguno de los dos represente literalmente
-// días. Los umbrales de pendiente FLAT/SLOPE tampoco se reescalaron: son
-// porcentajes de movimiento por vela calibrados a ojo sobre velas de 1H: con
-// velas de 5 minutos casi seguro requieren re-calibración empírica aparte.
+// EXCEPCIÓN para 1D (scale=24): dividir ÷24 deja CONSOL=2.5, POLE≈0.83 —
+// menos de una vela, la regresión lineal sobre 2-3 puntos no significa nada.
+// windowScale() hace una excepción explícita: para scale=24 el DIVISOR de
+// ventanas es 1, no 24 — se usan los mismos conteos base que 1H (60/20/200/
+// 8/5/90...) pero interpretados en DÍAS en vez de horas (consolidación ~2
+// meses, pole ~3 semanas, ventana deslizante ~6.6 meses). Validado
+// empíricamente con datos reales de Binance (BTC/ETH/SOL/DOGE/ADA, 5 años):
+// escalando ÷24 dio CERO señales (checklist completo + R:R≥2) en los 5
+// símbolos; sin escalar (÷1) dio 24 señales repartidas de forma razonable
+// entre ápices 0-10. `scale` en sí (para daysToApex y BACKTEST_APEX_DAYS_
+// TARGET_BY_SCALE) NO usa windowScale — sigue siendo el valor real (24).
+//
+// Sin cambios, y ya sin sentido literal como "días" en ningún intervalo: la
+// conversión "/6" de daysToApex asumía velas de 4H (24h/4h=6) — se deja fija
+// en /6 sin importar `scale` (igual que patrones-1h/page.jsx en vivo, que
+// también corre sobre velas de 1H con este mismo "/6" sin ajustar) para que
+// el filtro "ápice a N días" siga siendo el MISMO valor numérico que usa el
+// gate en vivo. Los umbrales de pendiente FLAT/SLOPE tampoco se reescalan:
+// son porcentajes de movimiento por vela calibrados a ojo sobre velas de 1H
+// (verificado empíricamente que sigue produciendo señales razonables en 1D
+// con las ventanas sin escalar — no se tocaron).
+function windowScale(scale) {
+    return scale === 24 ? 1 : scale;
+}
 
 // ─── Linear Regression ────────────────────────────────────────────────────────
 function linReg(values) {
@@ -45,7 +65,7 @@ function linReg(values) {
 }
 
 // ─── Liquidity Sweep Detection ─────────────────────────────────────────────────
-function detectLiquiditySweep(candles, lookback = 8 / 4, wickMargin = 0.0015) {
+function detectLiquiditySweep(candles, lookback = 8, wickMargin = 0.0015) {
     let sweptLow = false, sweptHigh = false;
     for (let i = 1; i < candles.length - 1; i++) {
         const c = candles[i];
@@ -65,8 +85,9 @@ function detectLiquiditySweep(candles, lookback = 8 / 4, wickMargin = 0.0015) {
 }
 
 // ─── Pattern Detection (idéntico a patrones-1h/page.jsx) ──────────────────────
-function detectPattern(candles) {
-    const CONSOL = 60 / 4, POLE = 20 / 4; // ÷4: antes 60/20 velas de 1H
+function detectPattern(candles, scale = 4) {
+    const ws = windowScale(scale);
+    const CONSOL = 60 / ws, POLE = 20 / ws; // ÷windowScale: línea base 60/20 velas de 1H
     if (candles.length < CONSOL + POLE) return null;
 
     const consolSlice = candles.slice(-CONSOL);
@@ -127,7 +148,7 @@ function detectPattern(candles) {
         ? Math.round(bandEnd / candleConvergence / 6)
         : null;
 
-    const recSlice      = consolSlice.slice(-Math.max(1, Math.round(5 / 4))); // 5/4=1.25 → 1 vela
+    const recSlice      = consolSlice.slice(-Math.max(1, Math.round(5 / ws)));
     const recCloses     = recSlice.map(c => c.close);
     const recLows       = recSlice.map(c => c.low);
     const recHighs      = recSlice.map(c => c.high);
@@ -136,7 +157,7 @@ function detectPattern(candles) {
     const retestBull    = recLows.some((l, i)  => l <= hEnd * 1.025 && recCloses[i] > hEnd * 1.001);
     const retestBear    = recHighs.some((h, i) => h >= lEnd * 0.975 && recCloses[i] < lEnd * 0.999);
 
-    const { sweptLow, sweptHigh } = detectLiquiditySweep(consolSlice);
+    const { sweptLow, sweptHigh } = detectLiquiditySweep(consolSlice, 8 / ws);
 
     const base = {
         compression, normH, normL, hR2: hReg.r2, lR2: lReg.r2,
@@ -174,10 +195,11 @@ function detectPattern(candles) {
 }
 
 // ─── Cup and Handle Detection (idéntico a patrones-1h/page.jsx) ───────────────
-function detectCupHandle(candles) {
-    const CUP_LEN    = Math.round(90 / 4); // ÷4: antes 90/20/20 velas de 1H (90/4=22.5 → 23)
-    const HANDLE_LEN = 20 / 4;
-    const PRIOR_LEN  = 20 / 4;
+function detectCupHandle(candles, scale = 4) {
+    const ws = windowScale(scale);
+    const CUP_LEN    = Math.round(90 / ws); // línea base 90/20/20 velas de 1H
+    const HANDLE_LEN = 20 / ws;
+    const PRIOR_LEN  = 20 / ws;
     if (candles.length < CUP_LEN + HANDLE_LEN + PRIOR_LEN) return null;
 
     const priorSlice  = candles.slice(-(CUP_LEN + HANDLE_LEN + PRIOR_LEN), -(CUP_LEN + HANDLE_LEN));
@@ -225,7 +247,7 @@ function detectCupHandle(candles) {
     if (handleDepth > cupHeight * 0.45)       return null;
     if (handleLow < cupBottom)                return null;
 
-    const recSlice      = handleSlice.slice(-Math.max(1, Math.round(5 / 4))); // 5/4=1.25 → 1 vela
+    const recSlice      = handleSlice.slice(-Math.max(1, Math.round(5 / ws)));
     const recCloses     = recSlice.map(c => c.close);
     const recLows       = recSlice.map(c => c.low);
     const aboveResCount = recCloses.filter(c => c > rightRim * 1.003).length;
@@ -239,7 +261,7 @@ function detectCupHandle(candles) {
     const quality     = symScore * 0.5 + depthScore * 0.5;
     const compression = 1 - (handleDepth / cupHeight);
 
-    const { sweptLow, sweptHigh } = detectLiquiditySweep([...cupSlice, ...handleSlice]);
+    const { sweptLow, sweptHigh } = detectLiquiditySweep([...cupSlice, ...handleSlice], 8 / ws);
 
     return {
         type: 'cup_handle',
@@ -358,11 +380,11 @@ export function calcLevels(result) {
 
 // Réplica pura de `fetchPatterns` de patrones-1h/page.jsx (sin el fetch — recibe
 // las velas ya descargadas). `candles` = últimas ventanas de hasta WINDOW velas
-// de 4H (antes 200 velas 1H) terminando en el punto que se quiere evaluar,
-// con forma {high, low, close}.
-export function evaluateWindow(candles) {
-    if (!Array.isArray(candles) || candles.length < 80 / 4) return null;
-    return detectCupHandle(candles) ?? detectPattern(candles);
+// del intervalo elegido (200 velas de 1H equivalentes, ver windowSize) terminando
+// en el punto que se quiere evaluar, con forma {high, low, close}.
+export function evaluateWindow(candles, scale = 4) {
+    if (!Array.isArray(candles) || candles.length < 80 / windowScale(scale)) return null;
+    return detectCupHandle(candles, scale) ?? detectPattern(candles, scale);
 }
 
 // Mismo gate que runScan en patrones-1h/page.jsx: TODAS las condiciones del
@@ -375,26 +397,50 @@ export function passesAllConditions(result, levels) {
 }
 
 // BACKTEST_APEX_DAYS_TARGET replicaba, sin cambios, el mismo umbral que
-// app/lib/autoTrade.js (BACKTEST_APEX_DAYS) mientras este motor corrió sobre
-// velas de 1H — ahí sí tenía sentido copiarlo literal. Ahora que este motor
-// corre sobre velas de 4H (y el divisor "/6" de daysToApex, antes un desajuste
-// deliberado que asumía 4H sobre datos de 1H, pasó a ser matemáticamente
-// correcto — ver comentario de daysToApex), el valor "10" ya no es alcanzable:
-// con CONSOL/POLE escalados ÷4, daysToApex nunca supera ~6 en la práctica
+// app/lib/autoTrade.js (BACKTEST_APEX_DAYS=[10]) mientras este motor corrió
+// sobre velas de 1H (scale=1) — ahí sí tiene sentido usar el 10 literal, es
+// justo la línea base original. Corriendo sobre velas de 4H (scale=4), con
+// CONSOL/POLE escalados ÷4 daysToApex nunca supera ~6 en la práctica
 // (verificado con datos reales de Binance — BTC/ETH/SOL/DOGE/ADA a 4H nunca
-// superan 6). Se recalibra a 10/4=2.5→2, el valor que en esa misma prueba dio
-// más señales con RR≥2 en los 5 símbolos (25 vs 12 con target=3). Si en el
-// futuro autoTrade.js cambia BACKTEST_APEX_DAYS, este valor YA NO debe copiarse
-// literal — hay que re-derivarlo con el mismo criterio (real-days-target/4).
-const BACKTEST_APEX_DAYS_TARGET = 2;
+// superan 6), así que el 10 nunca se alcanza: se recalibró a mano a 2 (no
+// 10/4=2.5 redondeado, que daría 3) porque en esa prueba fue el valor que dio
+// más señales con RR≥2 en los 5 símbolos (25 vs 12 con target=3). Por eso es
+// un mapa explícito por escala y no una fórmula — a diferencia de las demás
+// ventanas (CONSOL, POLE, WINDOW...), este valor se ajustó empíricamente, no
+// solo matemáticamente. Si se agrega soporte a otro intervalo, hay que
+// correr esa misma prueba para ese scale en vez de asumir round(10/scale).
+//
+// scale=24 (1D) se calibró con la misma prueba: datos reales de Binance
+// (BTC/ETH/SOL/DOGE/ADA, 5 años, velas 1D, ventanas SIN escalar — ver
+// windowScale). daysToApex salió repartido de forma razonable entre 0 y 10
+// (24 señales con checklist completo + R:R≥2 en total); el valor con más
+// señales individualmente fue 5 (5 de 24), por encima de 2/4/9 (3 cada uno) —
+// se eligió 5 por ser el máximo, mismo criterio que 4H, aunque con una
+// muestra chica (24 señales en 5 años) la diferencia contra 2/4/9 no es
+// gigante; si en el futuro se junta más historial vale la pena re-correr
+// esta prueba con más señales para confirmar o ajustar.
+const BACKTEST_APEX_DAYS_TARGET_BY_SCALE = { 1: 10, 4: 2, 24: 5 };
 const MIN_FAVORABLE_RR = 2;
 
-const WINDOW = 200 / 4; // ÷4: antes 200 velas de 1H, igual lapso real con velas de 4H
+// Exportado solo para mostrarlo en la UI (app/backtest-historico/page.jsx) —
+// la lógica real de simulateSymbolTrades ya lo resuelve por su cuenta.
+export function apexDaysTarget(scale = 4) {
+    return BACKTEST_APEX_DAYS_TARGET_BY_SCALE[scale] ?? Math.round(10 / scale);
+}
 
-// Recorre el historial de un símbolo (velas de 4H ascendentes por
-// tiempo) igual que lo haría el scanner en vivo cada hora: ventana deslizante
-// que cubre el mismo lapso real que antes (las últimas 200 velas de 1H),
-// mismo gate de "todas las condiciones" + ápice exactamente en 10 días + TP2
+// Cuántas velas cubre la ventana deslizante — línea base 200 velas de 1H,
+// dividido ÷scale para cubrir el mismo lapso real con cualquier intervalo.
+// Exportado para que backtest-historico/page.jsx pueda calcular cuántas
+// velas mínimas necesita descargar por símbolo antes de poder evaluar nada.
+export function windowSize(scale = 4) {
+    return 200 / windowScale(scale);
+}
+
+// Recorre el historial de un símbolo (velas ascendentes por tiempo, en el
+// intervalo elegido) igual que lo haría el scanner en vivo cada hora: ventana
+// deslizante que cubre el mismo lapso real sin importar el intervalo (las
+// últimas 200 velas de 1H equivalentes, ver windowSize), mismo gate de "todas
+// las condiciones" + ápice exactamente en el target de esta escala + TP2
 // favorable (R:R ≥ 2) — el mismo gate que dispara logBacktestEntry/
 // tryAutoOpenPosition en patrones-1h/page.jsx.
 //
@@ -417,17 +463,19 @@ const WINDOW = 200 / 4; // ÷4: antes 200 velas de 1H, igual lapso real con vela
 // applyCapitalCompounding) y depende del orden cronológico GLOBAL de todas las
 // operativas de todos los símbolos, así que ese cálculo se hace aparte, una
 // vez que se juntaron las operativas de todos los símbolos.
-export function simulateSymbolTrades(candles) {
+export function simulateSymbolTrades(candles, scale = 4) {
     const trades = [];
+    const WINDOW = windowSize(scale);
+    const apexTarget = apexDaysTarget(scale);
     let i = WINDOW;
 
     while (i < candles.length) {
         const window = candles.slice(i - WINDOW, i);
-        const result = evaluateWindow(window);
+        const result = evaluateWindow(window, scale);
         const levels = result ? calcLevels(result) : null;
 
         const validSignal = passesAllConditions(result, levels)
-            && result.daysToApex === BACKTEST_APEX_DAYS_TARGET
+            && result.daysToApex === apexTarget
             && levels.rr >= MIN_FAVORABLE_RR;
 
         if (!validSignal) { i += 1; continue; }
@@ -522,6 +570,8 @@ export function applyCapitalCompounding(allTrades, {
     }));
     let capital      = initialTotalCapital; // equity total (solo se mueve al cerrar)
     let capitalInUse = 0;                   // margen comprometido en operativas abiertas ahora
+    let concurrentOpen  = 0;                // operativas EJECUTADAS abiertas en este instante (no cuenta las saltadas por falta de capital)
+    let maxConcurrentOpen = 0;              // el máximo visto en todo el recorrido
 
     for (const ev of events) {
         const trade = enriched[ev.idx];
@@ -541,11 +591,14 @@ export function applyCapitalCompounding(allTrades, {
             trade.pnlUsdt         = trade.pct != null ? trade.pct * candidateCapital * leverage : null;
             capitalInUse += candidateCapital;
             trade.availableAfter = capital - capitalInUse; // baja: se acaba de comprometer margen
+            concurrentOpen += 1;
+            if (concurrentOpen > maxConcurrentOpen) maxConcurrentOpen = concurrentOpen;
         } else if (trade.executed) {
             capitalInUse -= trade.assignedCapital;
             if (trade.pnlUsdt != null) capital += trade.pnlUsdt;
             trade.capitalAfter   = capital; // capital total justo después de cerrar esta operativa
             trade.availableAfter = capital - capitalInUse; // sube: se acaba de liberar el margen
+            concurrentOpen -= 1;
         }
     }
 
@@ -554,5 +607,5 @@ export function applyCapitalCompounding(allTrades, {
     // cerraron dentro del rango descargado.
     const availableCapital = capital - capitalInUse;
 
-    return { trades: enriched, finalCapital: capital, availableCapital };
+    return { trades: enriched, finalCapital: capital, availableCapital, maxConcurrentOpen };
 }

@@ -1,8 +1,8 @@
 'use client'
 import { useMemo, useRef, useState } from 'react'
 import { BITUNIX_TICKERS } from '../patrones-1h/page'
-import { fetch4hCandles } from '../lib/binanceHistory'
-import { simulateSymbolTrades, applyCapitalCompounding, PATTERN_META } from '../lib/backtestPatternEngine'
+import { fetchHistoricalCandles, INTERVAL_SCALE } from '../lib/binanceHistory'
+import { simulateSymbolTrades, applyCapitalCompounding, PATTERN_META, windowSize, apexDaysTarget } from '../lib/backtestPatternEngine'
 
 // Backtest histórico basado en la MISMA lógica de detección/validación que
 // app/patrones-1h/page.jsx (ver app/lib/backtestPatternEngine.js) — replica,
@@ -17,7 +17,12 @@ import { simulateSymbolTrades, applyCapitalCompounding, PATTERN_META } from '../
 // símbolos, ya que cada uno requiere descargar el histórico paginado.
 
 const LOOKBACK_BUFFER_DAYS = 10 // margen (en días, no depende del tamaño de vela) para que la ventana tenga historia antes del inicio del rango
-const MIN_CANDLES_NEEDED = 200 / 4 + 10 // WINDOW (escalado ÷4 a velas de 4H, ver backtestPatternEngine.js) + margen
+
+const INTERVAL_OPTIONS = [
+    { value: '4h', label: '4H' },
+    { value: '1h', label: '1H' },
+    { value: '1d', label: '1D' },
+]
 
 const DEFAULT_SYMBOLS = [
     // Mas ganadoras
@@ -77,6 +82,7 @@ function backtestStartMs() {
 
 export default function BacktestHistoricoPage() {
     const [symbolsText, setSymbolsText] = useState(DEFAULT_SYMBOLS)
+    const [candleInterval, setCandleInterval] = useState('4h')
     const [leverage, setLeverage] = useState(2)
     const [initialTotalCapital, setInitialTotalCapital] = useState(100)
     const [initialPerTradeCapital, setInitialPerTradeCapital] = useState(2)
@@ -95,6 +101,9 @@ export default function BacktestHistoricoPage() {
         const symbols = parseSymbols(symbolsText)
         if (symbols.length === 0) return
 
+        const scale = INTERVAL_SCALE[candleInterval]
+        const minCandlesNeeded = windowSize(scale) + 10 // WINDOW (escalado ÷scale, ver backtestPatternEngine.js) + margen
+
         setRawTrades([])
         setSymbolStatus({})
         setProgress({ done: 0, total: symbols.length, current: null })
@@ -110,11 +119,11 @@ export default function BacktestHistoricoPage() {
             setProgress({ done: idx, total: symbols.length, current: symbol })
 
             try {
-                const candles = await fetch4hCandles(symbol, startMs, endMs)
-                if (candles.length < MIN_CANDLES_NEEDED) {
+                const candles = await fetchHistoricalCandles(symbol, startMs, endMs, candleInterval)
+                if (candles.length < minCandlesNeeded) {
                     setSymbolStatus(s => ({ ...s, [symbol]: `sin historial suficiente (${candles.length} velas)` }))
                 } else {
-                    const symbolTrades = simulateSymbolTrades(candles).map(t => ({ ...t, symbol }))
+                    const symbolTrades = simulateSymbolTrades(candles, scale).map(t => ({ ...t, symbol }))
                     setRawTrades(prev => [...prev, ...symbolTrades])
                     setSymbolStatus(s => ({ ...s, [symbol]: `${symbolTrades.length} operativa(s)` }))
                 }
@@ -133,7 +142,7 @@ export default function BacktestHistoricoPage() {
 
     const stopBacktest = () => { stopRef.current = true }
 
-    const { trades, finalCapital, availableCapital } = useMemo(
+    const { trades, finalCapital, availableCapital, maxConcurrentOpen } = useMemo(
         () => applyCapitalCompounding(rawTrades, { leverage, initialTotalCapital, initialPerTradeCapital, capitalStep, perTradeStep }),
         [rawTrades, leverage, initialTotalCapital, initialPerTradeCapital, capitalStep, perTradeStep]
     )
@@ -232,16 +241,42 @@ export default function BacktestHistoricoPage() {
     return (
         <div className="p-6 space-y-6">
             <div>
-                <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">Backtest histórico ({BACKTEST_YEARS_BACK} años · patrones, velas 4H)</h1>
+                <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">Backtest histórico ({BACKTEST_YEARS_BACK} años · patrones, velas {candleInterval.toUpperCase()})</h1>
                 <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
                     Corre la misma detección y checklist de <code className="text-xs">/patrones-1h</code> desde
-                    el 1 de enero de hace {BACKTEST_YEARS_BACK} años, buscando ápice exactamente a 10 días con TP2 favorable (R:R ≥ 2).
+                    el 1 de enero de hace {BACKTEST_YEARS_BACK} años, buscando ápice exactamente a {apexDaysTarget(INTERVAL_SCALE[candleInterval])} (equivalente a 10 días en velas de 1H) con TP2 favorable (R:R ≥ 2).
                     Apalancamiento {leverage}× sobre un capital que empieza en ${initialTotalCapital} y ${initialPerTradeCapital}/operación
                     (sube ${perTradeStep} cada vez que el capital total sube ${capitalStep}).
                 </p>
             </div>
 
             <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4 space-y-3">
+                <div>
+                    <label className="text-xs font-semibold text-gray-500 dark:text-slate-400 block mb-1">Intervalo de velas</label>
+                    <div className="inline-flex rounded-lg border border-gray-200 dark:border-slate-600 overflow-hidden">
+                        {INTERVAL_OPTIONS.map(opt => (
+                            <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => setCandleInterval(opt.value)}
+                                disabled={running}
+                                className={`px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                                    candleInterval === opt.value
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'bg-white dark:bg-slate-900 text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1">
+                        1H = mismas ventanas de detección que el motor original (más lento de correr, más señales).
+                        4H = ventanas escaladas ÷4 para cubrir el mismo lapso real con menos velas por símbolo.
+                        1D = ventanas sin escalar (igual que 1H) pero en días — consolidación ~2 meses, historial ~5 años por símbolo.
+                    </p>
+                </div>
+
                 <div>
                     <div className="flex items-center justify-between mb-1">
                         <label className="text-xs font-semibold text-gray-500 dark:text-slate-400">Símbolos a analizar (separados por coma)</label>
@@ -357,7 +392,7 @@ export default function BacktestHistoricoPage() {
             </div>
 
             {/* ── Resultados ── */}
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-7 gap-4">
                 <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4">
                     <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Operativas cerradas</div>
                     <div className="text-2xl font-semibold text-gray-800 dark:text-slate-100">{closed.length}</div>
@@ -385,6 +420,11 @@ export default function BacktestHistoricoPage() {
                     <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Sin capital disponible</div>
                     <div className="text-2xl font-semibold text-amber-500 dark:text-amber-400">{skipped.length}</div>
                     {skipped.length > 0 && <div className="text-xs text-gray-400 dark:text-slate-500 mt-1">señales que no se pudieron tomar</div>}
+                </div>
+                <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4">
+                    <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Máx. operativas simultáneas</div>
+                    <div className="text-2xl font-semibold text-purple-600 dark:text-purple-400">{maxConcurrentOpen}</div>
+                    <div className="text-xs text-gray-400 dark:text-slate-500 mt-1">ejecutadas al mismo tiempo, en cualquier símbolo</div>
                 </div>
             </div>
 

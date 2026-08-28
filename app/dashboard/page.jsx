@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { fetchBacktestLog } from '../lib/backtestLog'
 
 // ── localStorage ───────────────────────────────────────────────
 const LS_KEY = 'trading_equity_history'
@@ -118,6 +119,23 @@ const fmtS = (v, d = 2) => {
 }
 const pColor = v => v == null ? 'text-gray-400 dark:text-slate-500' : v > 0 ? 'text-green-600 dark:text-green-400' : v < 0 ? 'text-red-500 dark:text-red-400' : 'text-gray-500 dark:text-slate-400'
 const pBg    = v => v == null ? '' : v > 0 ? 'bg-green-50 dark:bg-green-950 border-green-100 dark:border-green-900' : v < 0 ? 'bg-red-50 dark:bg-red-950 border-red-100 dark:border-red-900' : 'bg-gray-50 dark:bg-slate-800 border-gray-100 dark:border-slate-800'
+
+// ── backtesting (P&L estimado) ───────────────────────────────────
+// Misma lógica que app/backtesting/page.jsx (calcPnl) — monto de referencia
+// para registros previos a que el log guardara `capital` por operación.
+const BT_PNL_NOTIONAL_USDT = 4
+function calcBacktestPnl(record) {
+    const entry = record.precioEntrada
+    if (entry == null) return null
+    const exitPrice = record.estatus === 'ganadora' ? record.takeProfit1
+        : record.estatus === 'perdedora' ? record.stopLoss
+        : record.ultimoPrecio
+    if (exitPrice == null) return null
+    const isLong  = record.tipoPosicion === 'long'
+    const capital = record.capital ?? BT_PNL_NOTIONAL_USDT
+    const pct = isLong ? (exitPrice - entry) / entry : (entry - exitPrice) / entry
+    return pct * capital
+}
 
 // ── analytics ─────────────────────────────────────────────────
 function computeMetrics(history, equity) {
@@ -299,12 +317,28 @@ function MetricCard({ label, value, sub, pct, color = 'text-gray-800 dark:text-s
 }
 
 // ── Page ──────────────────────────────────────────────────────
+// Mismo endpoint y normalización de respuesta que fetchOpenPositions() en
+// app/lib/autoTrade.js — Bitunix no es consistente en el nombre del array
+// (positionList/list/array plano según el endpoint).
+async function fetchOpenPositionsCount() {
+    const res  = await fetch('/api/bitunix/api/v1/futures/position/get_pending_positions?pageNum=1&pageSize=100')
+    const json = await res.json()
+    const d = json?.data
+    const list = Array.isArray(d?.positionList) ? d.positionList
+        : Array.isArray(d?.list) ? d.list
+        : Array.isArray(d)       ? d
+        : []
+    return list.length
+}
+
 export default function DashboardPage() {
-    const [equity,    setEquity]    = useState(null)
-    const [loading,   setLoading]   = useState(true)
-    const [error,     setError]     = useState(null)
-    const [history,   setHistory]   = useState([])
-    const [lastFetch, setLastFetch] = useState(null)
+    const [equity,          setEquity]          = useState(null)
+    const [openPositions,   setOpenPositions]   = useState(null)
+    const [backtestRecords, setBacktestRecords] = useState([])
+    const [loading,         setLoading]         = useState(true)
+    const [error,           setError]           = useState(null)
+    const [history,         setHistory]         = useState([])
+    const [lastFetch,       setLastFetch]        = useState(null)
 
     useEffect(() => {
         const run = async () => {
@@ -342,6 +376,20 @@ export default function DashboardPage() {
             } finally {
                 setLoading(false)
             }
+
+            // Aparte del try/catch de equity: si Bitunix falla aquí no debe
+            // tirar las demás métricas, solo deja "—" en esta card.
+            try {
+                setOpenPositions(await fetchOpenPositionsCount())
+            } catch {
+                setOpenPositions(null)
+            }
+
+            // Log de backtesting (app/patrones, app/patrones-1h) — si falla,
+            // se queda con lo último conocido en vez de parpadear a vacío.
+            try {
+                setBacktestRecords(await fetchBacktestLog())
+            } catch {}
         }
         run()
         const iv = setInterval(run, 1 * 60 * 1000)
@@ -350,6 +398,16 @@ export default function DashboardPage() {
 
     const { dailyPnl, weeklyPnl, monthlyPnl, pnl30, baseDaily, baseWeek, baseMonth, base30 } =
         computeMetrics(history, equity)
+
+    // P&L estimado del log de backtesting (app/backtesting) — igual cálculo
+    // que ahí: cerradas asumen cierre en TP1/SL, en_proceso usa último precio.
+    const btEnProceso  = backtestRecords.filter(r => r.estatus === 'en_proceso').length
+    const btClosedPnl  = backtestRecords
+        .filter(r => r.estatus === 'ganadora' || r.estatus === 'perdedora')
+        .map(calcBacktestPnl).filter(v => v != null)
+    const btTotalClosedPnl = btClosedPnl.reduce((s, v) => s + v, 0)
+    const btOpenPnl    = backtestRecords.filter(r => r.estatus === 'en_proceso').map(calcBacktestPnl).filter(v => v != null)
+    const btTotalOpenPnl = btOpenPnl.reduce((s, v) => s + v, 0)
 
     const pct = (pnl, base) =>
         base && base > 0 && pnl != null ? `(${fmtS((pnl / base) * 100, 2)}%)` : null
@@ -399,7 +457,24 @@ export default function DashboardPage() {
                 </div>
 
                 {/* Metric cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <div className="grid grid-cols-2 2xl:grid-cols-6 gap-4">
+                    <MetricCard
+                        label="Operaciones abiertas"
+                        value={openPositions != null ? String(openPositions) : '—'}
+                        sub="Posiciones abiertas en Bitunix"
+                        loading={loading}
+                    />
+                    <MetricCard
+                        label="P&L estimado (cerradas)"
+                        value={`${fmtS(btTotalClosedPnl)} USDT`}
+                        sub={btEnProceso > 0
+                            ? `${fmtS(btTotalOpenPnl)} USDT no realizado en proceso`
+                            : `Basado en el capital registrado por operación (o $${BT_PNL_NOTIONAL_USDT} si no se registró)`}
+                        color={pColor(btTotalClosedPnl)}
+                        loading={loading}
+                    />
+                </div>
+                <div className="grid grid-cols-5 2xl:grid-cols-6 gap-4">
                     <MetricCard
                         label="Equity actual"
                         value={equity != null ? `${fmt(equity)} USDT` : '—'}
@@ -437,7 +512,7 @@ export default function DashboardPage() {
                         loading={loading}
                     />
                 </div>
-                
+
                 {/* Market hours (CDMX) */}
                 <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
                     <p className="text-sm font-semibold text-gray-700 dark:text-slate-200 mb-1">Horarios de mercado</p>
