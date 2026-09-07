@@ -10,7 +10,7 @@
 // aquí a mano para que el backtest siga siendo representativo.
 //
 // Este motor corría originalmente sobre velas de 1H (después, brevemente, sobre
-// 5 minutos; ahora soporta 1H, 4H y 1D — ver app/lib/binanceHistory.js y el
+// 5 minutos; ahora soporta 1H, 4H y 1D — ver app/lib/bitunixHistory.js y el
 // selector de intervalo en app/backtest-historico/page.jsx). Todas las
 // funciones reciben `scale` = cuántas "velas de 1H" cubre una vela de este
 // intervalo (1 para 1H, la línea base original; 4 para 4H; 24 para 1D). Las
@@ -62,6 +62,22 @@ function linReg(values) {
     const ssRes = values.reduce((a, v, i) => a + (v - (slope * i + intc)) ** 2, 0);
     const r2    = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
     return { slope, intercept: intc, r2, predict: x => slope * x + intc };
+}
+
+// ─── Average True Range ─────────────────────────────────────────────────────
+// Volatilidad reciente real del símbolo (no un % fijo) — usada por calcLevels
+// para el margen del SL más allá del canal (ver ATR_SL_MULT). Cambio SOLO de
+// este backtest (ver nota al inicio del archivo: es una copia deliberada, no
+// afecta a patrones-1h/page.jsx en vivo).
+function computeATR(candles) {
+    if (candles.length < 2) return 0;
+    let sum = 0;
+    for (let i = 1; i < candles.length; i++) {
+        const c = candles[i], p = candles[i - 1];
+        const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+        sum += tr;
+    }
+    return sum / (candles.length - 1);
 }
 
 // ─── Liquidity Sweep Detection ─────────────────────────────────────────────────
@@ -158,12 +174,13 @@ function detectPattern(candles, scale = 4) {
     const retestBear    = recHighs.some((h, i) => h >= lEnd * 0.975 && recCloses[i] < lEnd * 0.999);
 
     const { sweptLow, sweptHigh } = detectLiquiditySweep(consolSlice, 8 / ws);
+    const atr = computeATR(consolSlice);
 
     const base = {
         compression, normH, normL, hR2: hReg.r2, lR2: lReg.r2,
         hEnd, lEnd, avgPrice, quality, pricePos,
         curPrice, poleMovePct: hasPole ? poleMovePct : null,
-        daysToApex,
+        daysToApex, atr,
         aboveResCount, belowSupCount, retestBull, retestBear,
         sweptLow, sweptHigh,
     };
@@ -262,6 +279,7 @@ function detectCupHandle(candles, scale = 4) {
     const compression = 1 - (handleDepth / cupHeight);
 
     const { sweptLow, sweptHigh } = detectLiquiditySweep([...cupSlice, ...handleSlice], 8 / ws);
+    const atr = computeATR([...cupSlice, ...handleSlice]);
 
     return {
         type: 'cup_handle',
@@ -270,7 +288,7 @@ function detectCupHandle(candles, scale = 4) {
         hEnd: rightRim,
         lEnd: handleLow,
         curPrice, pricePos, compression, quality,
-        daysToApex: null,
+        daysToApex: null, atr,
         poleMovePct: priorMovePct,
         aboveResCount, belowSupCount: 0, retestBull, retestBear: false,
         normH: 0, normL: 0, hR2: quality, lR2: quality, avgPrice: rimAvg,
@@ -329,7 +347,28 @@ export function getEntryConditionsOk(result) {
     ];
 }
 
-// ─── Niveles de entrada/SL/TP (idéntico a patrones-1h/page.jsx) ───────────────
+// ─── Niveles de entrada/SL/TP ───────────────────────────────────────────────
+// Entry/TP1/TP2/TP3 son idénticos a patrones-1h/page.jsx. El margen del SL
+// más allá del canal NO lo es — experimento SOLO de este backtest (ver nota
+// al inicio del archivo: es una copia deliberada, esto no toca la versión en
+// vivo): en vez de un 1.5% fijo, el margen se ensancha con el ATR real del
+// símbolo (ATR_SL_MULT × ATR), para ver si reduce los "stops de ruido" que
+// igual habrían llegado a TP1 — hipótesis detrás del win rate de 46.5% a 4H.
+// Math.max contra el 1.5% de siempre: el SL nunca queda MÁS angosto que
+// antes, solo igual o más ancho — así se aísla el efecto de ensanchar, sin
+// mezclarlo con también achicar el SL en símbolos de baja volatilidad.
+//
+// ATR_SL_CAP_PCT: tope duro adicional. El ATR como % del precio crece con el
+// tamaño de vela (verificado con datos reales de Bitunix — BTC/SOL/DOGE: en
+// 4H el margen ATR queda en ~1.75%-3.2%, pero en 1D sube a ~3.6%-6.1%, hasta
+// 4x el 1.5% original). Sin este tope, en 1D el riesgo por operación se
+// dispara mucho más que en 4H/1H mientras TP2 no cambia, hundiendo el R:R y
+// dejando pasar el filtro MIN_FAVORABLE_RR solo a las señales más extremas —
+// causa muy probable de que el win rate a 1D (34%) haya quedado peor que a
+// 4H. El tope aplica parejo a cualquier intervalo (no depende de `scale`).
+const ATR_SL_MULT = 1.5;
+const ATR_SL_CAP_PCT = 0.035;
+
 export function calcLevels(result) {
     const meta   = PATTERN_META[result.type] ?? {};
     const isBull = meta.bias === "bullish";
@@ -340,21 +379,24 @@ export function calcLevels(result) {
     if (channelH <= 0) return null;
     const patternH = channelH / Math.max(0.05, 1 - result.compression);
 
+    const atr = result.atr ?? 0;
+    const slBuffer = base => Math.min(Math.max(atr * ATR_SL_MULT, base * 0.015), base * ATR_SL_CAP_PCT);
+
     let entry, sl, tp2;
 
     if (result.type === 'cup_handle') {
         entry = result.hEnd * 1.003;
-        sl    = result.lEnd * 0.985;
+        sl    = result.lEnd - slBuffer(result.lEnd);
         tp2   = result.hEnd + (result.leftRim - result.cupBottom);
     } else if (isBull) {
         entry = result.hEnd * 1.003;
-        sl    = result.lEnd * 0.985;
+        sl    = result.lEnd - slBuffer(result.lEnd);
         tp2   = result.poleMovePct != null
             ? entry * (1 + result.poleMovePct / 100)
             : entry + patternH;
     } else {
         entry = result.lEnd * 0.997;
-        sl    = result.hEnd * 1.015;
+        sl    = result.hEnd + slBuffer(result.hEnd);
         tp2   = result.poleMovePct != null
             ? entry * (1 - result.poleMovePct / 100)
             : entry - patternH;

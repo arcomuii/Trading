@@ -2,10 +2,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { CandlestickChart } from '../../components/CandlestickChart'
 import { fetchBacktestLog, updateTradeLevels } from '../lib/backtestLog'
+import { DEFAULT_AUTO_TRADE_LEVERAGE } from '../lib/autoTrade'
+import { fetchKlines } from '../lib/bitunixMarket'
 
 // Monto asumido por operación para estimar el P&L en USDT — el log no guarda
 // el tamaño real de la posición, así que se usa un monto fijo de referencia.
 const PNL_NOTIONAL_USDT = 4
+// Apalancamiento asumido para registros previos a que se guardara `leverage`
+// por operación (no se puede reconstruir retroactivamente cuál se usó).
+const PNL_LEVERAGE_FALLBACK = DEFAULT_AUTO_TRADE_LEVERAGE
 
 const REFRESH_MS = 30_000
 const CHART_REFRESH_MS = 10 * 60_000
@@ -27,21 +32,17 @@ const INTERVAL_MS = { '5m': 5 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000
 const CDMX_OFFSET_SECONDS = 6 * 3600
 
 async function fetchCandles(activo, startMs, endMs, interval = DEFAULT_CANDLE_INTERVAL) {
-    // Binance limita a 1000 velas por request. Con intervalos chicos (5m) una
-    // operación de varios días excedería ese límite si se pide desde la
-    // apertura real, y Binance recortaría por el lado más reciente (justo lo
-    // que se quiere ver en una operación en curso). Por eso se acota la
-    // ventana a las últimas 1000 velas del intervalo elegido.
-    const cappedStartMs = Math.max(startMs, endMs - INTERVAL_MS[interval] * 1000)
-    const res = await fetch(
-        `/api/binance/api/v3/klines?symbol=${activo}&interval=${interval}&startTime=${cappedStartMs}&endTime=${endMs}&limit=1000`
-    )
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const raw = await res.json()
-    if (!Array.isArray(raw)) return []
-    return raw.map(([openTime, open, high, low, close]) => ({
+    // Bitunix limita a 200 velas por request sin importar el `limit` pedido
+    // (Binance, antes usado aquí, permitía hasta 1000). Con intervalos chicos
+    // (5m) una operación de varios días excedería ese límite si se pide desde
+    // la apertura real; Bitunix ya recorta por el lado más reciente (ancla en
+    // endTime, ver bitunixMarket.js), que es justo lo que se quiere ver en una
+    // operación en curso, así que basta con acotar la ventana a esas 200 velas.
+    const cappedStartMs = Math.max(startMs, endMs - INTERVAL_MS[interval] * 200)
+    const raw = await fetchKlines(activo, interval, { startTime: cappedStartMs, endTime: endMs })
+    return raw.map(({ openTime, open, high, low, close }) => ({
         time: Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
-        open: parseFloat(open), high: parseFloat(high), low: parseFloat(low), close: parseFloat(close),
+        open, high, low, close,
     }))
 }
 
@@ -74,6 +75,11 @@ function fmt(n) {
 // real; los anteriores no lo tienen y caen al monto fijo de referencia
 // PNL_NOTIONAL_USDT. Ganadora → se asume cierre en TP1; Perdedora → en SL;
 // En proceso → último precio (no realizada).
+// El USDT real de una posición apalancada es el movimiento de precio aplicado
+// al NOTIONAL (capital * leverage), no solo al capital/margen — igual que
+// roiTp1 en OpenPositionModal (pnlUsdt/margin*100 == priceMovePct*leverage).
+// Los registros previos a que se guardara `leverage` por operación caen al
+// fallback (no se puede reconstruir retroactivamente cuál se usó realmente).
 function calcPnl(record) {
     const entry = record.precioEntrada
     if (entry == null) return null
@@ -85,8 +91,9 @@ function calcPnl(record) {
 
     const isLong = record.tipoPosicion === 'long'
     const capital = record.capital ?? PNL_NOTIONAL_USDT
+    const leverage = record.leverage ?? PNL_LEVERAGE_FALLBACK
     const pct = isLong ? (exitPrice - entry) / entry : (entry - exitPrice) / entry
-    return { pct: pct * 100, usdt: pct * capital }
+    return { pct: pct * leverage * 100, usdt: pct * capital * leverage }
 }
 
 function fmtUsdt(n) {
@@ -436,7 +443,7 @@ export default function BacktestingPage() {
                         {fmtUsdt(totalClosedPnlUsdt)}
                     </div>
                     <div className="text-xs text-gray-400 dark:text-slate-500 mt-1">
-                        {enProceso > 0 ? `${fmtUsdt(totalOpenPnlUsdt)} no realizado en proceso` : `basado en el capital registrado por operación (o $${PNL_NOTIONAL_USDT} si no se registró)`}
+                        {enProceso > 0 ? `${fmtUsdt(totalOpenPnlUsdt)} no realizado en proceso` : `basado en el capital y apalancamiento registrados por operación (o $${PNL_NOTIONAL_USDT} / ${PNL_LEVERAGE_FALLBACK}x si no se registraron)`}
                     </div>
                 </div>
             </div>

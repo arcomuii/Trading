@@ -4,6 +4,8 @@
 // (registro de nuevos hallazgos) y AppShell.jsx (monitor de precio cada minuto).
 // Igual que el resto del proyecto, sólo corre mientras el navegador está abierto.
 
+import { fetchLastPrice } from './bitunixMarket';
+
 const CHECK_INTERVAL_MS = 60_000;
 
 export async function fetchBacktestLog() {
@@ -15,7 +17,7 @@ export async function fetchBacktestLog() {
 // Registra un nuevo hallazgo si el ápice está en 8-10 días y el TP2 es favorable.
 // El API deduplica: si ya hay un registro "en_proceso" para el mismo activo, no
 // crea uno nuevo (evita duplicar la misma operativa en cada corrida del scan).
-export async function logBacktestEntry({ coin, levels, isBull, patternLabel, origen, capital }) {
+export async function logBacktestEntry({ coin, levels, isBull, patternLabel, origen, capital, leverage }) {
     const activo = `${coin.symbol.toUpperCase()}USDT`;
     try {
         const res = await fetch('/api/backtesting', {
@@ -36,6 +38,11 @@ export async function logBacktestEntry({ coin, levels, isBull, patternLabel, ori
                 // mismo que usaría tryAutoOpenPosition/OpenPositionModal como margen.
                 // Igual que `origen`, los registros previos a este cambio quedan sin él.
                 capital: capital ?? null,
+                // Apalancamiento configurado (getAutoTradeLeverage()) en el momento del
+                // hallazgo — necesario para calcular el P&L real en USDT (notional =
+                // capital * leverage). Igual que `origen`/`capital`, los registros
+                // previos a este cambio quedan sin él.
+                leverage: leverage ?? null,
             }),
         });
         if (!res.ok) console.error('[BacktestLog] Error al registrar', activo, await res.text());
@@ -57,12 +64,9 @@ export async function updateTradeLevels(id, { stopLoss, takeProfit1 }) {
     return res.json();
 }
 
-async function fetchLastPrice(symbol) {
-    const res = await fetch(`/api/binance/api/v3/ticker/price?symbol=${symbol}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    return parseFloat(json.price);
-}
+// Antes leía el precio de Binance (ticker/price); se migró a Bitunix
+// (fetchLastPrice en bitunixMarket.js) para que el cierre de una operativa se
+// decida con el mismo precio contra el que realmente se opera.
 
 // Revisa cada operativa "en_proceso": obtiene el precio actual y determina si
 // ya tocó TP1 (ganadora) o SL (perdedora). Actualiza horaCierre/estatus solo

@@ -31,12 +31,12 @@ const AUTO_TRADE_LEVERAGE_LS_KEY = 'trading_auto_trade_leverage';
 // apalancamiento (mismo motivo, mismo rechazo) y la posición nunca se abre,
 // aunque el hallazgo ya haya quedado registrado en el log de backtesting
 // (que es independiente de si la orden real se colocó o no).
-const qtyPrecisionCache = new Map(); // symbolPair -> { precision, minQty }
+const qtyPrecisionCache = new Map(); // symbolPair -> { precision, minQty, pricePrecision }
 
 async function getQtyPrecision(symbolPair) {
     if (qtyPrecisionCache.has(symbolPair)) return qtyPrecisionCache.get(symbolPair);
 
-    let info = { precision: 4, minQty: 0 }; // fallback conservador si falla la consulta
+    let info = { precision: 4, minQty: 0, pricePrecision: 6 }; // fallback conservador si falla la consulta
     try {
         const res  = await fetch(`/api/bitunix/api/v1/futures/market/trading_pairs?symbols=${symbolPair}`);
         const json = await res.json();
@@ -45,6 +45,9 @@ async function getQtyPrecision(symbolPair) {
             info = {
                 precision: Number.isFinite(Number(pair.basePrecision)) ? Number(pair.basePrecision) : 4,
                 minQty:    parseFloat(pair.minTradeVolume ?? 0) || 0,
+                // Precisión del PRECIO (tpPrice/slPrice) — distinta de basePrecision
+                // (que es la de la cantidad). Ver formatPriceForSymbol.
+                pricePrecision: Number.isFinite(Number(pair.quotePrecision)) ? Number(pair.quotePrecision) : 6,
             };
         }
     } catch (e) {
@@ -62,6 +65,19 @@ export async function formatQtyForSymbol(symbolPair, qty) {
     const rounded = Number(qty.toFixed(precision));
     if (!(rounded > 0) || (minQty > 0 && rounded < minQty)) return null;
     return rounded.toFixed(precision);
+}
+
+// Formatea un precio (tpPrice/slPrice) con la precisión real de Bitunix
+// (quotePrecision) para `symbolPair`. calcLevels calcula los niveles con
+// aritmética de punto flotante sobre el precio de entrada, que puede traer
+// muchos más decimales de los que Bitunix acepta para ese contrato (ej.
+// CHZUSDT: quotePrecision=5, pero el nivel calculado llega con ~15 decimales)
+// — Bitunix rechaza la orden completa con "Parameter error"
+// en place_order, y como el rechazo no depende del apalancamiento, un
+// reintento escalando o bajando leverage nunca lo resuelve.
+export async function formatPriceForSymbol(symbolPair, price) {
+    const { pricePrecision } = await getQtyPrecision(symbolPair);
+    return Number(price.toFixed(pricePrecision)).toFixed(pricePrecision);
 }
 
 // Monto fijo (en USDT) a usar en cada apertura automática. Persistido en
@@ -210,12 +226,42 @@ async function placeAutoOrder({ symbolPair, isBull, sl, tp1, qtyStr }) {
         return { ok, data: { step: "place_order", leverage: lev, ...data } };
     };
 
-    let lev    = getAutoTradeLeverage();
+    const configured = getAutoTradeLeverage();
+    let lev    = configured;
     let result = await attempt(lev);
+
+    // 1) Escalar hacia ARRIBA hasta el tope — cubre el caso típico: rechazo
+    // por margen insuficiente al apalancamiento configurado (más apalancamiento
+    // = menos margen requerido para el mismo nocional).
     while (!result.ok && lev < AUTO_MAX_LEVERAGE) {
         lev += 1;
         result = await attempt(lev);
     }
+
+    // 2) Si ya se llegó al tope (o arrancó ahí, ej. configurado=20=AUTO_MAX_
+    // LEVERAGE) y sigue sin éxito, un par de reintentos al MISMO apalancamiento
+    // por si el rechazo fue transitorio (glitch de red, rate limit momentáneo
+    // de Bitunix) antes de asumir que es un problema real de configuración.
+    for (let i = 0; !result.ok && i < 2; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        result = await attempt(lev);
+    }
+
+    // 3) Si sigue sin éxito, el problema puede ser justo al revés de lo que
+    // asume el paso 1: el símbolo no acepta el apalancamiento configurado ni
+    // el tope (ej. Bitunix responde "Parameter error" código 10002 en
+    // place_order, no en change_leverage) — bajar el apalancamiento sí puede
+    // resolverlo, a costa de exigir más margen para el mismo nocional. Se
+    // baja desde configurado-1 (no desde el tope) porque, si en el paso 1 se
+    // escaló hacia arriba, ya se probó cada valor entre configurado y el
+    // tope sin éxito — repetirlos aquí sería inútil.
+    if (!result.ok) {
+        for (let l = configured - 1; !result.ok && l >= MIN_AUTO_TRADE_LEVERAGE; l--) {
+            lev = l;
+            result = await attempt(lev);
+        }
+    }
+
     return { ...result, leverage: lev };
 }
 
@@ -234,13 +280,50 @@ async function sendTradeOpenedEmail(payload) {
     }
 }
 
+// Contraparte de sendTradeOpenedEmail — antes, si tryAutoOpenPosition fallaba
+// por cualquier motivo, no quedaba ningún rastro visible fuera de la consola
+// del navegador (que nadie revisa), así que una señal podía nunca abrirse en
+// Bitunix sin que el usuario se enterara ni supiera por qué.
+async function sendTradeFailedEmail(payload) {
+    try {
+        const res  = await fetch('/api/trade-failed-email', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (!res.ok) console.error('[TradeFailedEmail] Error:', json);
+        else         console.log('[TradeFailedEmail] Enviado:', payload.symbol, payload.reason);
+    } catch (e) {
+        console.error('[TradeFailedEmail] Excepción:', e);
+    }
+}
+
 // Intenta abrir automáticamente una posición para un patrón cuyo ápice está a
 // 8-10 días. Antes de operar verifica EN VIVO contra Bitunix que no haya ya una
 // posición abierta en ese símbolo (sin límite de operativas concurrentes).
-// Sólo envía correo si la orden se coloca con éxito.
+// Manda correo tanto si la orden se coloca con éxito como si falla (salvo
+// 'already_open', que es un skip esperado/rutinario, no una falla real) —
+// para que una señal detectada nunca desaparezca sin dejar rastro.
 export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }) {
     const sym        = coin.symbol.toUpperCase();
     const symbolPair = `${sym}USDT`;
+
+    const fail = async (reason, detail) => {
+        console.error(`[AutoTrade] ${symbolPair}: no se abrió (${reason})`, detail ?? '');
+        await sendTradeFailedEmail({
+            symbol:      symbolPair,
+            direction:   isBull ? 'LONG' : 'SHORT',
+            patternLabel,
+            entry:       levels?.entry,
+            stopLoss:    levels?.sl,
+            takeProfit1: levels?.tp1,
+            reason,
+            detail:      detail != null ? JSON.stringify(detail) : null,
+            detectedAt:  new Date().toISOString(),
+        });
+        return { opened: false, reason, data: detail };
+    };
 
     try {
         const positions    = await fetchOpenPositions();
@@ -256,8 +339,7 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
         console.log(`[AutoTrade] ${symbolPair}: monto/operación configurado = $${capital} (margen objetivo @ ${leverage}×)`);
         const balance = await fetchAvailableBalance();
         if (capital > balance) {
-            console.log(`[AutoTrade] ${symbolPair}: monto configurado ($${capital}) excede el saldo disponible ($${balance.toFixed(2)}), se omite.`);
-            return { opened: false, reason: 'insufficient_balance' };
+            return fail('insufficient_balance', { capital, balance });
         }
 
         // El monto configurado es el margen que se quiere comprometer — el nocional
@@ -265,20 +347,26 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
         // así margen = nocional ÷ apalancamiento = capital, en vez de capital ÷ apalancamiento.
         const notional = capital * leverage;
         const qty = levels.entry > 0 ? notional / levels.entry : 0;
-        if (!(qty > 0)) return { opened: false, reason: 'invalid_qty' };
+        if (!(qty > 0)) return fail('invalid_qty', { notional, entry: levels.entry });
         const qtyStr = await formatQtyForSymbol(symbolPair, qty);
         if (!qtyStr) {
-            console.log(`[AutoTrade] ${symbolPair}: cantidad calculada (${qty}) queda por debajo del mínimo operable de Bitunix para este símbolo, se omite.`);
-            return { opened: false, reason: 'qty_below_minimum' };
+            return fail('qty_below_minimum', { qty });
         }
 
+        // calcLevels calcula SL/TP1 con aritmética de punto flotante — llegan con
+        // muchos más decimales de los que Bitunix acepta para ese contrato
+        // (quotePrecision). Sin este redondeo, place_order rechaza la orden
+        // completa con "Parameter error" sin importar el apalancamiento (ver
+        // formatPriceForSymbol).
+        const slStr  = await formatPriceForSymbol(symbolPair, levels.sl);
+        const tp1Str = await formatPriceForSymbol(symbolPair, levels.tp1);
+
         const order = await placeAutoOrder({
-            symbolPair, isBull, sl: levels.sl, tp1: levels.tp1, qtyStr,
+            symbolPair, isBull, sl: slStr, tp1: tp1Str, qtyStr,
         });
 
         if (!order.ok) {
-            console.error(`[AutoTrade] ${symbolPair}: falló la orden`, order.data);
-            return { opened: false, reason: 'order_failed', data: order.data };
+            return fail('order_failed', order.data);
         }
 
         await sendTradeOpenedEmail({
@@ -296,7 +384,6 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
 
         return { opened: true };
     } catch (e) {
-        console.error(`[AutoTrade] ${symbolPair}: excepción`, e);
-        return { opened: false, reason: 'exception', error: e.message };
+        return fail('exception', { message: e.message });
     }
 }

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { fetchBacktestLog } from '../lib/backtestLog'
+import { DEFAULT_AUTO_TRADE_LEVERAGE } from '../lib/autoTrade'
 
 // ── localStorage ───────────────────────────────────────────────
 const LS_KEY = 'trading_equity_history'
@@ -35,6 +36,15 @@ function cdmxDateStr(date = new Date()) {
     return `${parts.year}-${parts.month}-${parts.day}`
 }
 
+// Hora del día (0-23) en CDMX de un instante dado — usada para el corte de
+// las 18:00 hrs de la semana de trading (ver tradingWeekSunday).
+function cdmxHour(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Mexico_City', hour: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date).reduce((acc, p) => (acc[p.type] = p.value, acc), {})
+    return parseInt(parts.hour, 10)
+}
+
 // Suma/resta días a una fecha 'YYYY-MM-DD' operando solo con componentes de
 // fecha vía Date.UTC — nunca pasa por una zona horaria local, así que no
 // puede correrse un día por un redondeo de huso horario.
@@ -45,11 +55,27 @@ function addDaysToDateStr(dateStr, days) {
     return utc.toISOString().slice(0, 10)
 }
 
-// Lunes de la semana que contiene `dateStr` ('YYYY-MM-DD').
-function mondayOf(dateStr) {
+// Domingo ('YYYY-MM-DD') de la semana calendario (domingo-sábado) que
+// contiene `dateStr`, sin considerar hora — para agrupar días YA CERRADOS
+// (ver buildWeeklyMap). tradingWeekSunday la reutiliza para la semana
+// "actual", con el ajuste de las 18:00.
+function sundayOf(dateStr) {
     const [y, m, d] = dateStr.split('-').map(Number)
     const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay() // 0=Dom..6=Sáb
-    return addDaysToDateStr(dateStr, (day === 0 ? -6 : 1) - day)
+    return addDaysToDateStr(dateStr, -day)
+}
+
+// Domingo ('YYYY-MM-DD') que marca el ARRANQUE de la semana de trading que
+// contiene el instante (dateStr + hour, hour en CDMX vía cdmxHour). La semana
+// ahora corre de domingo a domingo, con corte a las 18:00 hrs CDMX (no a
+// medianoche): un domingo antes de esa hora todavía es el cierre de la
+// semana anterior, no el arranque de la nueva — se usa el domingo previo
+// como referencia hasta que dan las 18:00.
+function tradingWeekSunday(dateStr, hour) {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay() // 0=Dom..6=Sáb
+    const effectiveStr = (day === 0 && hour < 18) ? addDaysToDateStr(dateStr, -1) : dateStr
+    return sundayOf(effectiveStr)
 }
 
 // ── market hours (CDMX) ────────────────────────────────────────
@@ -121,9 +147,12 @@ const pColor = v => v == null ? 'text-gray-400 dark:text-slate-500' : v > 0 ? 't
 const pBg    = v => v == null ? '' : v > 0 ? 'bg-green-50 dark:bg-green-950 border-green-100 dark:border-green-900' : v < 0 ? 'bg-red-50 dark:bg-red-950 border-red-100 dark:border-red-900' : 'bg-gray-50 dark:bg-slate-800 border-gray-100 dark:border-slate-800'
 
 // ── backtesting (P&L estimado) ───────────────────────────────────
-// Misma lógica que app/backtesting/page.jsx (calcPnl) — monto de referencia
-// para registros previos a que el log guardara `capital` por operación.
+// Misma lógica que app/backtesting/page.jsx (calcPnl) — monto y apalancamiento
+// de referencia para registros previos a que el log guardara `capital`/`leverage`
+// por operación. El USDT real es el movimiento de precio aplicado al notional
+// (capital * leverage), no solo al capital/margen.
 const BT_PNL_NOTIONAL_USDT = 4
+const BT_PNL_LEVERAGE_FALLBACK = DEFAULT_AUTO_TRADE_LEVERAGE
 function calcBacktestPnl(record) {
     const entry = record.precioEntrada
     if (entry == null) return null
@@ -133,8 +162,9 @@ function calcBacktestPnl(record) {
     if (exitPrice == null) return null
     const isLong  = record.tipoPosicion === 'long'
     const capital = record.capital ?? BT_PNL_NOTIONAL_USDT
+    const leverage = record.leverage ?? BT_PNL_LEVERAGE_FALLBACK
     const pct = isLong ? (exitPrice - entry) / entry : (entry - exitPrice) / entry
-    return pct * capital
+    return pct * capital * leverage
 }
 
 // ── analytics ─────────────────────────────────────────────────
@@ -150,9 +180,9 @@ function computeMetrics(history, equity) {
     const cutoff30 = addDaysToDateStr(today, -30)
     const base30   = sorted.find(e => e.date >= cutoff30) ?? sorted[0]
 
-    const monday    = mondayOf(today)
-    const friday    = addDaysToDateStr(monday, 4)
-    const firstWeek = sorted.find(e => e.date >= monday && e.date <= friday)
+    const sunday    = tradingWeekSunday(today, cdmxHour())
+    const nextSat   = addDaysToDateStr(sunday, 6)
+    const firstWeek = sorted.find(e => e.date >= sunday && e.date <= nextSat)
 
     return {
         dailyPnl:   yesterday ? equity - yesterday.equity : null,
@@ -182,8 +212,26 @@ function buildMonthlyMap(history) {
     return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]))
 }
 
+// Igual que buildMonthlyMap, pero agrupando por semana de trading (domingo a
+// domingo, ver sundayOf) en vez de por mes calendario. Cada entrada del
+// historial ya es un día CERRADO, así que se agrupa por semana calendario
+// simple (sin el ajuste de las 18:00 de tradingWeekSunday, que solo aplica a
+// "hoy" para decidir si la semana actual ya arrancó).
+function buildWeeklyMap(history) {
+    const map = {}
+    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
+    for (const entry of sorted) {
+        const w = sundayOf(entry.date)
+        if (!map[w]) map[w] = { first: entry.equity, last: entry.equity }
+        else map[w].last = entry.equity
+    }
+    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]))
+}
+
 // ── SVG Area Chart ────────────────────────────────────────────
 function AreaChart({ data }) {
+    const [hoverIdx, setHoverIdx] = useState(null)
+
     if (!data || data.length < 2) return (
         <div className="h-48 flex items-center justify-center text-sm text-gray-300 dark:text-slate-600">
             Acumulando historial...
@@ -212,7 +260,7 @@ function AreaChart({ data }) {
         : Array.from({ length: lc }, (_, i) => Math.round(i / (lc - 1) * (data.length - 1)))
 
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 200 }}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 200, overflow: 'visible' }}>
             <defs>
                 <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--chart-line)" stopOpacity="0.22" />
@@ -237,12 +285,48 @@ function AreaChart({ data }) {
                     </text>
                 </g>
             ))}
+            {hoverIdx != null && (
+                <circle cx={xOf(hoverIdx)} cy={yOf(data[hoverIdx].equity)} r="5.5"
+                        fill="var(--chart-line)" stroke="#fff" strokeWidth="1.5" />
+            )}
+            {/* Zonas invisibles de hover — una por punto, cada una hasta el punto
+                medio con su vecino, de todo el alto del chart. */}
+            {data.map((_, i) => {
+                const prevMid = i === 0 ? p.l : (xOf(i - 1) + xOf(i)) / 2
+                const nextMid = i === data.length - 1 ? p.l + cW : (xOf(i) + xOf(i + 1)) / 2
+                return (
+                    <rect key={i} x={prevMid} y={p.t} width={Math.max(nextMid - prevMid, 0.01)} height={cH}
+                          fill="transparent" style={{ cursor: 'pointer' }}
+                          onMouseEnter={() => setHoverIdx(i)}
+                          onMouseLeave={() => setHoverIdx(null)} />
+                )
+            })}
+            {hoverIdx != null && (() => {
+                const d      = data[hoverIdx]
+                const x      = xOf(hoverIdx)
+                const label  = `${d.date}  ${fmt(d.equity, 2)}`
+                const boxW   = 18 + label.length * 5.6
+                const boxH   = 22
+                const boxX   = Math.min(Math.max(x - boxW / 2, p.l), p.l + cW - boxW)
+                const boxY   = 2
+                return (
+                    <g pointerEvents="none">
+                        <rect x={boxX} y={boxY} width={boxW} height={boxH} rx="4"
+                              fill="var(--chart-tooltip-bg, #1f2937)" opacity="0.95" />
+                        <text x={boxX + boxW / 2} y={boxY + boxH / 2 + 4} textAnchor="middle" fontSize="13" fontWeight="600" fill="#f3f4f6">
+                            {d.date}  <tspan fill="#93c5fd">{fmt(d.equity, 2)}</tspan>
+                        </text>
+                    </g>
+                )
+            })()}
         </svg>
     )
 }
 
 // ── SVG Bar Chart ─────────────────────────────────────────────
 function BarChart({ data }) {
+    const [hoverIdx, setHoverIdx] = useState(null)
+
     if (!data || data.length === 0) return (
         <div className="h-32 flex items-center justify-center text-sm text-gray-300 dark:text-slate-600">
             Acumulando datos diarios...
@@ -257,9 +341,10 @@ function BarChart({ data }) {
     const zeroY = p.t + cH / 2
     const scY   = (cH / 2) / maxA
     const bw    = Math.max(4, (cW / data.length) * 0.65)
+    const colW  = cW / data.length
 
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 150 }}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 150, overflow: 'visible' }}>
             {[-maxA, 0, maxA].map((t, i) => {
                 const y = zeroY - t * scY
                 return (
@@ -276,23 +361,54 @@ function BarChart({ data }) {
                 )
             })}
             {data.map((d, i) => {
-                const x  = p.l + (i + 0.5) * (cW / data.length)
+                const x  = p.l + (i + 0.5) * colW
                 const bh = Math.max(Math.abs(d.pnl) * scY, 2)
                 const y  = d.pnl >= 0 ? zeroY - bh : zeroY
                 return (
                     <rect key={i} x={x - bw / 2} y={y} width={bw} height={bh}
-                          rx="2" fill={d.pnl >= 0 ? '#22c55e' : '#ef4444'} opacity="0.85" />
+                          rx="2" fill={d.pnl >= 0 ? '#22c55e' : '#ef4444'}
+                          opacity={hoverIdx === i ? 1 : 0.85} />
                 )
             })}
             {data.map((d, i) => {
                 if (i !== 0 && i !== data.length - 1 && (i + 1) % 5 !== 0) return null
-                const x = p.l + (i + 0.5) * (cW / data.length)
+                const x = p.l + (i + 0.5) * colW
                 return (
                     <text key={i} x={x} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--chart-axis)">
                         {d.date.slice(5)}
                     </text>
                 )
             })}
+            {/* Zonas invisibles de hover — una por columna, de todo el alto
+                del chart, así funciona incluso con barras de 2px (el mínimo)
+                que serían casi imposibles de "pisar" con el cursor. */}
+            {data.map((_, i) => {
+                const x = p.l + i * colW
+                return (
+                    <rect key={i} x={x} y={p.t} width={colW} height={cH}
+                          fill="transparent" style={{ cursor: 'pointer' }}
+                          onMouseEnter={() => setHoverIdx(i)}
+                          onMouseLeave={() => setHoverIdx(null)} />
+                )
+            })}
+            {hoverIdx != null && (() => {
+                const d  = data[hoverIdx]
+                const x  = p.l + (hoverIdx + 0.5) * colW
+                const label   = `${d.date}  ${fmtS(d.pnl, 1)}`
+                const boxW    = 18 + label.length * 5.6
+                const boxH    = 22
+                const boxX    = Math.min(Math.max(x - boxW / 2, p.l), p.l + cW - boxW)
+                const boxY    = 2
+                return (
+                    <g pointerEvents="none">
+                        <rect x={boxX} y={boxY} width={boxW} height={boxH} rx="4"
+                              fill="var(--chart-tooltip-bg, #1f2937)" opacity="0.95" />
+                        <text x={boxX + boxW / 2} y={boxY + boxH / 2 + 4} textAnchor="middle" fontSize="13" fontWeight="600" fill="#f3f4f6">
+                            {d.date}  <tspan fill={d.pnl >= 0 ? '#4ade80' : '#f87171'}>{fmtS(d.pnl, 1)}</tspan>
+                        </text>
+                    </g>
+                )
+            })()}
         </svg>
     )
 }
@@ -417,16 +533,17 @@ export default function DashboardPage() {
     const month  = todayUTC.toLocaleDateString('es-MX', { month: 'long', year: 'numeric', timeZone: 'UTC' })
     const monthN = todayUTC.toLocaleDateString('es-MX', { month: 'long', timeZone: 'UTC' })
 
-    const monday       = mondayOf(todayStr)
-    const fridayStr     = addDaysToDateStr(monday, 4)
+    const sunday       = tradingWeekSunday(todayStr, cdmxHour())
+    const nextSundayStr = addDaysToDateStr(sunday, 7)
     const weekRangeFmt = dateStr => new Date(`${dateStr}T00:00:00Z`)
         .toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' })
-    const weekLabel    = `${weekRangeFmt(monday)} – ${weekRangeFmt(fridayStr)}`
+    const weekLabel    = `${weekRangeFmt(sunday)} – ${weekRangeFmt(nextSundayStr)} · cierre 18:00`
 
     const cutoff = addDaysToDateStr(todayStr, -30)
     const hist30 = history.filter(e => e.date >= cutoff)
     const pnlSer = buildPnlSeries(hist30)
     const monthly = buildMonthlyMap(history)
+    const weekly  = buildWeeklyMap(history)
     const fx = getForexSessionHours()
     const nowTick    = new Date()
     const londonIsOpen = isWeekdayInZone(nowTick, 'Europe/London')     && nowTick >= fx.londonOpen && nowTick < fx.londonClose
@@ -489,7 +606,7 @@ export default function DashboardPage() {
                         loading={loading}
                     />
                     <MetricCard
-                        label="P&L Semana (Lun-Vie)"
+                        label="P&L Semana (Dom-Dom)"
                         value={weeklyPnl != null ? `${fmtS(weeklyPnl)} USDT` : '—'}
                         pct={pct(weeklyPnl, baseWeek)}
                         sub={weekLabel}
@@ -620,6 +737,38 @@ export default function DashboardPage() {
                                     .toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
                                 return (
                                     <div key={key} className={`rounded-xl p-4 border ${pBg(pnl)}`}>
+                                        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-2 capitalize">
+                                            {label}
+                                        </p>
+                                        <p className={`text-xl font-black font-mono ${pColor(pnl)}`}>
+                                            {fmtS(pnl)}
+                                        </p>
+                                        <p className={`text-xs font-semibold mt-0.5 ${pColor(pnl)}`}>
+                                            {fmtS(pct2, 2)}%
+                                        </p>
+                                        <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1">USDT</p>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* Weekly summary */}
+                {weekly.length > 0 && (
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
+                        <p className="text-sm font-semibold text-gray-700 dark:text-slate-200 mb-1">Resumen semanal</p>
+                        <p className="text-xs text-gray-400 dark:text-slate-500 mb-4">De domingo a domingo · cierre 18:00 hrs</p>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                            {weekly.map(([sunday, { first, last }]) => {
+                                const pnl     = last - first
+                                const pct2    = first > 0 ? (pnl / first) * 100 : 0
+                                const nextSun = addDaysToDateStr(sunday, 7)
+                                const fmtDay  = d => new Date(`${d}T00:00:00Z`)
+                                    .toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+                                const label   = `${fmtDay(sunday)} – ${fmtDay(nextSun)}`
+                                return (
+                                    <div key={sunday} className={`rounded-xl p-4 border ${pBg(pnl)}`}>
                                         <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-slate-500 mb-2 capitalize">
                                             {label}
                                         </p>

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { CandlestickChart } from "../../components/CandlestickChart";
+import { fetchKlines } from "../lib/bitunixMarket";
 
 // lightweight-charts renderiza las marcas de tiempo como si fueran UTC. México
 // (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6,
@@ -53,9 +54,11 @@ function fmtDate(ts) {
 }
 
 // ─── CandleChart ──────────────────────────────────────────────────────────────
-// Gráfico de velas (Binance), conmutable 1H/4H, con líneas de referencia para
-// Entrada/TP/SL superpuestas, para ver de un vistazo si el precio se está
-// acercando al take-profit o al stop-loss — reemplaza el gauge horizontal anterior.
+// Gráfico de velas (Bitunix — antes Binance, migrado para usar los mismos
+// precios contra los que realmente se opera), conmutable 1H/4H, con líneas de
+// referencia para Entrada/TP/SL superpuestas, para ver de un vistazo si el
+// precio se está acercando al take-profit o al stop-loss — reemplaza el gauge
+// horizontal anterior.
 function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
     const [candles,       setCandles]       = useState(null);
     const [error,         setError]         = useState(null);
@@ -67,16 +70,11 @@ function CandleChart({ symbol, entry, tp, sl, currentPrice }) {
         const fetchCandles = (isFirst) => {
             if (isFirst) setCandles(null);
             setError(null);
-            fetch(`/api/binance/api/v3/klines?symbol=${symbol}&interval=${chartInterval}&limit=100`)
-                .then(r => r.json())
+            fetchKlines(symbol, chartInterval, { limit: 100 })
                 .then(raw => {
-                    if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
-                    setCandles(raw.map(([openTime, open, high, low, close]) => ({
-                        time:  Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
-                        open:  parseFloat(open),
-                        high:  parseFloat(high),
-                        low:   parseFloat(low),
-                        close: parseFloat(close),
+                    setCandles(raw.map(({ openTime, open, high, low, close }) => ({
+                        time: Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
+                        open, high, low, close,
                     })));
                 })
                 .catch(err => setError(err.message));

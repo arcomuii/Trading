@@ -1,13 +1,14 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
-import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS, getAutoTradeLeverage, setAutoTradeLeverage, DEFAULT_AUTO_TRADE_LEVERAGE, MIN_AUTO_TRADE_LEVERAGE, MAX_AUTO_TRADE_LEVERAGE, formatQtyForSymbol } from "../lib/autoTrade";
+import { isApexTarget, isApexDisplayTarget, isFavorableTp2, isBacktestApexTarget, tryAutoOpenPosition, getTradeAmount, setTradeAmount, DEFAULT_TRADE_AMOUNT_USDT, isAutoTradeEnabled, setAutoTradeEnabled, getAutoTradeApexDays, setAutoTradeApexDays, DEFAULT_AUTO_TRADE_APEX_DAYS, MIN_AUTO_TRADE_APEX_DAYS, MAX_AUTO_TRADE_APEX_DAYS, getAutoTradeLeverage, setAutoTradeLeverage, DEFAULT_AUTO_TRADE_LEVERAGE, MIN_AUTO_TRADE_LEVERAGE, MAX_AUTO_TRADE_LEVERAGE, formatQtyForSymbol, formatPriceForSymbol } from "../lib/autoTrade";
 import { logBacktestEntry } from "../lib/backtestLog";
+import { fetchKlines, fetchAllTickers } from "../lib/bitunixMarket";
 import { CandlestickChart } from "../../components/CandlestickChart";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-// Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
-// req/min posibles) — estas pausas son mucho más chicas que las de CoinGecko anónimo,
-// con margen de sobra.
+// Estas pausas ya eran mucho más chicas que las de CoinGecko anónimo (la fuente
+// de datos original de esta página), con margen de sobra — se mantienen igual
+// tras migrar de Binance a Bitunix como fuente de velas/tickers.
 const GAP_MS       = 1_500;
 const RETRY_DELAYS = [15_000, 30_000, 60_000];
 
@@ -31,8 +32,7 @@ function msUntilNextHalfHour() {
 // Exportado (además de usarse local) para que app/backtest-historico/page.jsx
 // pueda ofrecer el mismo universo de símbolos sin duplicar la lista.
 export const BITUNIX_TICKERS = [
-    //"BNB", "XLM", "XMR", "CC", "LINK", "LAB", "HBAR", "AVAX", "SUI", "XAUT", "TAO", "PAXG", "ASTER", "OKB", "WLD", "ONDO", "MNT", "AAVE", "ICP", "MORPHO", "ETC", "DEXE", "QNT", "STABLE", "ATOM", "RENDER", "ALGO", "BEAT", "KAS", "JST", "ENA", "VELVET", "VVV", "APT", "INJ", "AERO", "CAKE", "LIT", "DASH", "JTO", "FET", "VET", "PENGU", "VIRTUAL", "TIA", "XRP", "GWEI", "SUN", "GRASS", "ETHFI", "STX", "SPX", "PYTH", "BSV", "XPL", "FRAX", "ZBCN", "MON", "2Z", "PIEVERSE", "JASMY", "UB", "PENDLE", "LDO", "ZRO", "STRK", "GRT", "FF", "DOGE", "CHZ", "WIF", "AXS", "EIGEN", "RAY", "ENS", "SYRUP", "IOTA", "COMP", "TWT", "KAITO", "SKYAI", "NEO", "DYDX", "THETA", "MANA", "BAT", "SAND", "BAS", "AR", "GALA", "BILL", "SFP", "TAC", "TAG", "AWE", "IMX", "CVX", "ZK", "A", "KMNO", "GLM", "1INCH", "SENT", "RE", "MET", "ATH", "BANANAS31", "ZEC", "FORM", "MAGMA", "RAVE", "SYN", "LPT", "WAL", "SNX", "EGLD", "ARKM", "GAS", "QTUM", "RSR", "USELESS", "ORCA", "RIVER", "HOME", "RIF", "MELANIA", "ALLO", "Q", "ZRX", "FLUID", "ORDI", "ZAMA", "RVN", "SIREN", "SAFE", "BIO", "SOON", "NMR", "PLUME", "IO", "YFI", "ALCH", "ICNT", "BERA", "ENJ", "ZIL", "JELLYJELLY", "KSM", "GMX", "HOT", "LINEA", "CYS", "ZETA", "BRETT", "SPK", "COAI", "APR", "MINA", "AXL", "POLYX", "IDOL", "ROSE", "DUSK", "0G", "KAVA", "CKB", "BARD", "FLOW", "POPCAT", "ASTR", "ZEREBRO", "XVS", "ESP", "BLUR", "BR", "CELO", "SUSHI", "DEEP", "RED", "MANTA", "GPS", "MOODENG", "TRB", "TRIA", "HUMA", "AZTEC", "SAHARA", "ROBO", "NOT", "KGEN", "PROVE", "XVG", "SQD", "VTHO", "CROSS", "NXPC", "MMT", "MOCA", "ANKR", "MANTRA", "FOGO", "ZEST", "UMA", "VANA", "FOLKS", "AT", "ZORA", "MEW", "TRUTH", "LTC", "RPL", "API3", "USTC", "POWR", "ACX", "AVNT", "SSV", "IRYS", "BOME", "HIVE", "OCEAN", "ICX", "BNT", "CATI", "NOW", "WAVES", "SKR", "REZ", "BAND", "PEOPLE", "ZBT", "OPG", "GIGGLE", "ACU", "COTI", "EUL", "IOST", "NAORIS", "EDU", "MERL", "ETHW", "XAN", "AUCTION", "GMT", "NEAR", "ILV", "STG", "CYBER", "STEEM", "ONG", "CARV", "FIDA", "PUNDIX", "B2", "MTL", "SKL", "ARK", "RLC", "XPIN", "BNX", "CTSI", "LSK", "PROM", "SIGN", "LISTA", "AIXBT", "AGIX", "KNC", "WAXP", "EWT", "BREV", "BCH", "SAPIEN", "LQTY", "YGG", "AEVO", "CTK", "SXT", "MYX", "USUAL", "CGPT", "CVC", "SPELL", "SLP", "LUMIA", "BLUAI", "NIL", "SOMI", "TRX", "CTR", "PIPPIN", "MAGIC", "CETUS", "INX", "YB", "AGLD", "MOVR", "ERA", "WET", "BLESS", "CHR", "BIGTIME", "LAYER", "BICO", "FLOCK", "AIOT", "TA", "HEI", "DOT", "ZKC", "TAIKO", "XNY", "C98", "DIA", "ENSO", "LA", "OG", "XAI", "BLEND", "DOLO", "PARTI", "TNSR", "KERNEL", "HMSTR", "DOOD", "ON", "FIL", "STORJ", "GUN", "RAD", "CELR", "PORTAL", "NEWT", "STO", "MUBARAK", "OGN", "RARE", "GRIFFAIN", "ELSA", "DRIFT", "TRUST", "MAV", "CHILLGUY", "DYM", "MITO", "AKE", "TUT", "4", "RESOLV", "RECALL", "WCT", "MAVIA", "ARPA", "LYN", "ASR", "HFT", "COOKIE", "GAL", "SWARMS", "VANRY", "TRADOOR", "ANTHROPIC", "TLM", "V", "GTC", "SHELL", "SAGA", "AVA", "AIA", "VIC", "BTR", "TAKE", "ESPORTS", "FHE", "XEM", "EVAA", "HEMI", "MU", "SOLV", "EPIC", "KOMA", "MLN", "TOWNS", "NFP", "BLZ", "ALPINE", "REN", "HAEDAL", "XPT", "COIN", "OPN", "ACT", "OPENAI", "ZKP", "MASK", "SNDK", "FRONT", "XTZ", "PTB", "IOTX", "PRL", "PUMP", "ONT", "DRAM", "KAT", "KITE", "BAN", "T", "PI", "ACE", "CORE", "ID", "FARTCOIN", "UP", "SLX", "UNFI", "PHB", "BABY", "SPACE", "EDEN", "JUP", "DIS", "BMT", "FIGHT", "SOPH", "BOND", "COST", "JOE", "HD", "M", "APEX", "DOGS", "KEY", "S", "ARIA", "TURTLE", "BASED", "ADA", "LOOM", "SPCX", "TURBO", "TST", "AIN", "COS", "XAU", "POL", "MEGA", "UAI", "SONIC", "SOL", "CLO", "HANA", "BTW", "PNUT", "NIGHT", "GUA", "GOAT", "BROCCOLI", "GENIUS", "STMX", "SUPER", "OP", "ZEN", "TREE", "ORCL", "BSB", "TOSHI", "IN", "NOM", "ME", "COMBO", "XPD", "LIGHT", "POWER", "G", "PIXEL", "HOLO", "PROMPT", "BTC", "H", "RUNE", "THE", "TEST", "F", "COW", "COPPER", "CFX", "B", "ANIME", "W", "TON", "OPEN", "MEME", "KAIA", "CLANKER", "C", "SKY", "MSTR", "US", "BANK", "ORBS", "BB", "ARB", "WLFI", "WOO", "TSLA", "DAR", "CHIP", "1000BONK", "ALT", "USAR", "AMD", "INTC", "ZM", "CRCL", "TRUMP", "1000SATS", "SEI", "O", "ARX", "HYPER", "ETH", "AAOI", "CBRS", "METIS", "BIRB", "NBIS", "CRO", "ACH", "HIGH", "STBL", "ALICE", "SMCI", "PLTR", "LITE", "BANANA", "QCOM", "NFLX", "NVDA", "AIO", "MRVL", "CRM", "CRWD", "GOOGL", "MSFT", "CRWV", "SPY", "AMZN", "1000CAT", "BABA", "ASTS", "KLAY", "FLNC", "APE", "AMAT", "HYPE", "AAPL", "GLW", "CRV", "META", "ORDER", "LLY", "COLLECT", "IREN", "EWY", "1MBABYDOGE", "1000SHIB", "RIVN", "MATIC", "JCT", "UNI", "1000RATS", "USO", "INIT", "AVGO", "CFG", "MOVE", "RKLB", "DOG", "BE", "ONE", "QQQ", "ASML", "MIRA", "DELL", "SCR", "1000CHEEMS", "TSM", "FTM",
-    'CELO', 'XMR', 'MORPHO', 'IO', 'REZ', 'CELR', 'POL', 'BERA', 'EUL', 'DOLO', 'SCR', 'WAL', 'ZAMA', 'SPK', '0G', 'MANTA', 'GPS', 'MANTRA', 'VANA', 'ACX', 'WAVES', 'GIGGLE', 'AGIX', 'AEVO', 'CGPT', 'ERA', 'TUT', 'HEMI', 'EDEN', 'TREE', 'G', 'HOLO', 'SKY', 'TRUMP', 'WOO', 'OCEAN', 'COS', 'HBAR', 'SUI', 'DASH', 'KSM', 'BARD', 'RAD', 'AR', 'ZEN', 'MUBARAK', 'ANIME', 'SEI', 'JST', 'LQTY', 'ALICE', 'API3', 'BNB', 'KAVA', 'BLUR', 'TRB', 'SSV', 'CYBER', 'KAITO', 'SFP', 'MET', 'SYN', 'ORCA', 'ORDI', 'ZBT', 'STEEM', 'USUAL', 'STO', 'KEY', 'BTC', 'KAIA', '1000CHEEMS', 'ACH', '1INCH', 'ZRX', 'STORJ', 'SUPER', 'ZEC', 'FIDA', 'OGN', 'ENA', 'EIGEN', 'XVS', 'GMT', 'RESOLV', 'GAL', 'TON', 'PUNDIX', 'VET', 'ETHFI', 'GAS', 'ZIL', 'ICX', 'KNC', 'DIA', 'ALPINE', 'T', 'SOL', 'KLAY', 'GLM', 'RIF', 'ILV', 'AVAX', 'CVX', 'BAND', 'XVG', 'CVC', 'CAKE', 'ETH', 'IMX', 'ONT', 'XRP', 'CHZ', 'RAY', 'ENS', 'ASTR', 'NEAR', 'ID', 'JOE', 'STMX', 'OP', 'BANANA', 'FTM', 'SUN', 'WIF', 'TWT', 'BOME', 'LUMIA', 'RARE', 'WCT', 'XTZ', 'PUMP', 'METIS', '1MBABYDOGE', 
+    'ARK', 'AR', 'BAN', 'BR', 'CHILLGUY', 'EDU', 'MANA', 'ADA', 'GAS', 'GMT', 'POL', 'WOO', '1000RATS', 'ACH', 'APEX', 'ARKM', 'CYBER', 'DOLO', 'DYDX', 'GLM', 'HBAR', 'ID', 'JELLYJELLY', 'MASK', 'MOCA', 'NEAR', 'PIEVERSE', 'RIF', 'SONIC', 'SPK', 'TAC', '1MBABYDOGE', 'AIOT', 'ALPINE', 'ANIME', 'API3', 'APR', 'APT', 'ARPA', 'AXS', 'BABY', 'BLUAI', 'C98', 'CELO', 'COLLECT', 'COMP', 'CTK', 'CYS', 'ERA', 'ESPORTS', 'ETH', 'EVAA', 'FF', 'FIL', 'G', 'GWEI', 'H', 'HAEDAL', 'HUMA', 'IN', 'INIT', 'IOTA', 'KAIA', 'KOMA', 'KSM', 'LDO', 'ME', 'MET', 'MITO', 'MYX', 'NAORIS', 'NEO', 'NEWT', 'NOM', 'OP', 'OPEN', 'ORDI', 'PLUME', 'POWR', 'PROM', 'QTUM', 'REZ', 'RUNE', 'SCR', 'SHELL', 'SKR', 'SKY', 'STABLE', 'STEEM', 'TRIA', 'TRUMP', 'TURBO', 'TWT', 'UNI', 'VELVET', 'WAL', 'WIF', 'XPIN', 'ZEN', 'ZRX', 'ENA', 'SOL', '1000CHEEMS', 'AGLD', 'AIN', 'APE', 'BICO', 'BOME', 'CVC', 'EUL', 'IOTX', 'KMNO', 'LTC', 'NMR', 'PUMP', 'SNX', 'STO', 'TIA', 'HEI', 'AVAX', 'ETHFI', 'KAITO', 'MNT', 'PNUT', 'STG', 'STX', 'VET', 'XAI', 'XRP', 'ACT', 'ANKR', 'ARB', 'BIGTIME', 'BRETT', 'CHZ', 'COW', 'CRV', 'ENJ', 'EPIC', 'FLOCK', 'GALA', 'GOAT', 'GRASS', 'GRIFFAIN', 'GTC', 'GUA', 'HOT', 'ICP', 'ILV', 'INJ'
 ];
 
 
@@ -707,32 +707,27 @@ function PatternIcon({ type }) {
 }
 
 // ─── Fetch 4H OHLC with retry ─────────────────────────────────────────────────
-// Binance público: sin API key, límite ~6000 weight/min (klines de 200 velas = 2 de
-// weight) — muchísimo más margen que CoinGecko anónimo. `symbol` es el par de Binance,
-// ej. "BTCUSDT" (ya viene del ticker real de CoinGecko, sin el prefijo "1000x" de Bitunix).
+// Antes leía velas de Binance; se migró a Bitunix (fetchKlines en
+// bitunixMarket.js) para que la detección de patrones y los niveles de
+// entrada/SL/TP1 se calculen sobre los mismos precios contra los que
+// realmente se opera (evita el pequeño desajuste entre exchanges). `symbol`
+// es el par (ej. "BTCUSDT"), ya viene del ticker real de Bitunix.
 async function fetchPatterns(symbol, attempt = 0) {
-    const res = await fetch(
-        `/api/binance/api/v3/klines?symbol=${symbol}&interval=4h&limit=200`
-    );
-    if (res.status === 429 || res.status === 418) {
-        // 418 = IP bloqueada temporalmente por exceso de weight (poco probable a este ritmo)
-        if (attempt < RETRY_DELAYS.length) {
-            await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
-            return fetchPatterns(symbol, attempt + 1);
+    let raw;
+    try {
+        raw = await fetchKlines(symbol, '4h', { limit: 200 });
+    } catch (err) {
+        if (err.message === 'RATE_LIMIT') {
+            if (attempt < RETRY_DELAYS.length) {
+                await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+                return fetchPatterns(symbol, attempt + 1);
+            }
         }
-        throw new Error("RATE_LIMIT");
+        throw err;
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const raw = await res.json();
-    // Binance responde un objeto (no array) con {code, msg} para símbolos inexistentes
-    if (!Array.isArray(raw) || raw.length < 80)
-        throw new Error(`insufficient:${Array.isArray(raw) ? raw.length : 0}`);
-    // Binance klines format: [openTime, open, high, low, close, volume, closeTime, ...]
-    const data = raw.map(([, , high, low, close]) => ({
-        high:  parseFloat(high),
-        low:   parseFloat(low),
-        close: parseFloat(close),
-    }));
+    if (raw.length < 80)
+        throw new Error(`insufficient:${raw.length}`);
+    const data = raw.map(({ high, low, close }) => ({ high, low, close }));
     return detectCupHandle(data) ?? detectPattern(data);
 }
 
@@ -839,16 +834,24 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
             return { ok: false, data: { step: "qty_precision", symbol: symbolPair, qty, msg: "La cantidad calculada queda por debajo del mínimo operable de Bitunix para este símbolo." } };
         }
 
+        // Igual que con la cantidad: calcLevels calcula TP1/SL con aritmética de
+        // punto flotante y llegan con muchos más decimales de los que Bitunix
+        // acepta para este contrato (quotePrecision) — sin redondear, place_order
+        // rechaza la orden completa con "Parameter error" sin importar el
+        // apalancamiento (mismo síntoma que el bug de precisión de cantidad).
+        const tp1Str = await formatPriceForSymbol(symbolPair, levels.tp1);
+        const slStr  = await formatPriceForSymbol(symbolPair, levels.sl);
+
         const body = JSON.stringify({
             symbol:      symbolPair,
             side:        isBull ? "BUY" : "SELL",
             tradeSide:   "OPEN",
             orderType:   "MARKET",
             qty:         qtyStr,
-            tpPrice:     String(levels.tp1),
+            tpPrice:     tp1Str,
             tpStopType:  "LAST_PRICE",
             tpOrderType: "MARKET",
-            slPrice:     String(levels.sl),
+            slPrice:     slStr,
             slStopType:  "LAST_PRICE",
             slOrderType: "MARKET",
         });
@@ -1088,16 +1091,11 @@ function PatternChartModal({ coin, levels, onClose }) {
     useEffect(() => {
         setCandles(null);
         setError(null);
-        fetch(`/api/binance/api/v3/klines?symbol=${symbolPair}&interval=${chartInterval}&limit=100`)
-            .then(r => r.json())
+        fetchKlines(symbolPair, chartInterval, { limit: 100 })
             .then(raw => {
-                if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
-                setCandles(raw.map(([openTime, open, high, low, close]) => ({
-                    time:  Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
-                    open:  parseFloat(open),
-                    high:  parseFloat(high),
-                    low:   parseFloat(low),
-                    close: parseFloat(close),
+                setCandles(raw.map(({ openTime, open, high, low, close }) => ({
+                    time: Math.floor(openTime / 1000) - CDMX_OFFSET_SECONDS,
+                    open, high, low, close,
                 })));
             })
             .catch(err => setError(err.message));
@@ -1787,22 +1785,27 @@ export default function PatronesPage() {
     }, []);
 
     // 2. Construir la lista de monedas directo desde los tickers de Bitunix, enriquecida
-    // con precio/variación 24h de Binance (una sola petición bulk — ya no se usa CoinGecko
-    // para nada en esta página, ni para metadata ni para OHLC).
+    // con precio/variación 24h (una sola petición bulk — ya no se usa CoinGecko para
+    // nada en esta página, ni para metadata ni para OHLC). Antes el precio/variación
+    // 24h venía de Binance; se migró a Bitunix (fetchAllTickers en bitunixMarket.js)
+    // para usar los mismos precios contra los que realmente se opera. Como bonus, ya
+    // no hace falta el matching por símbolo base/prefijo que hacía falta con Binance
+    // (que no siempre lista el ticker con el mismo prefijo "1000x"/"1Mx" que Bitunix) —
+    // el símbolo de Bitunix ahora siempre matchea consigo mismo.
     useEffect(() => {
         if (bitunixSymbols === null) return;
         let cancelled = false;
 
         const fetchTickers = async (attempt = 0) => {
-            const r = await fetch('/api/binance/api/v3/ticker/24hr');
-            if (!r.ok) {
+            try {
+                return await fetchAllTickers();
+            } catch (err) {
                 if (attempt < 2) {
                     await new Promise(res => setTimeout(res, 5_000));
                     return fetchTickers(attempt + 1);
                 }
-                throw new Error(`HTTP ${r.status}`);
+                throw err;
             }
-            return r.json();
         };
 
         const load = async () => {
@@ -1812,12 +1815,12 @@ export default function PatronesPage() {
                 if (cancelled) return;
 
                 const bySymbol = {};
-                if (Array.isArray(tickers)) tickers.forEach(t => { bySymbol[t.symbol] = t; });
+                tickers.forEach(t => { bySymbol[t.symbol] = t; });
 
                 // Símbolo base (sin el prefijo "1000x"/"1Mx" que usa Bitunix para contratos
-                // con multiplicador) — Binance normalmente lista el ticker real sin ese
-                // prefijo, pero para algunos (ej. 1000CHEEMS, 1MBABYDOGE) sí lo conserva;
-                // prefixedFallback guarda el nombre original para probarlo si el base no matchea.
+                // con multiplicador) — se sigue derivando igual que antes (era necesario para
+                // matchear contra Binance, que no siempre conservaba el prefijo); prefixedFallback
+                // guarda el nombre original por si el ticker solo existe con el prefijo puesto.
                 const baseSymbols = new Set();
                 const prefixedFallback = new Map();
                 BITUNIX_TICKERS.forEach(raw => {
@@ -1834,14 +1837,14 @@ export default function PatronesPage() {
                         symbol:                      sym.toLowerCase(),
                         name:                        sym,
                         image:                       null,
-                        current_price:               t ? parseFloat(t.lastPrice) : null,
+                        current_price:               t ? t.lastPrice : null,
                         market_cap:                  null,
-                        price_change_percentage_24h: t ? parseFloat(t.priceChangePercent) : null,
+                        price_change_percentage_24h: t ? t.priceChangePercent : null,
                     };
                 });
                 setCoins(list);
             } catch (err) {
-                console.error("Binance ticker error:", err);
+                console.error("Bitunix ticker error:", err);
             } finally {
                 if (!cancelled) setLoadingCoins(false);
             }
@@ -1850,9 +1853,9 @@ export default function PatronesPage() {
         return () => { cancelled = true; };
     }, [bitunixSymbols]);
 
-    // Cobertura Bitunix vs Binance: ¿tenemos precio en vivo de Binance para este ticker?
-    // El scan solo corre sobre foundCoins — los símbolos sin match en Binance no
-    // tienen velas que analizar, así que escanearlos solo desperdicia tiempo/rate-limit.
+    // Cobertura de tickers: ¿tenemos precio en vivo para este símbolo? El scan solo
+    // corre sobre foundCoins — los símbolos sin match no tienen velas que analizar,
+    // así que escanearlos solo desperdicia tiempo/rate-limit.
     const foundCoins    = coins.filter(c => c.current_price != null);
     const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
 
@@ -1923,7 +1926,7 @@ export default function PatronesPage() {
                             // Log de backtesting: ápice 8-10 días + TP2 favorable (R:R >= 2),
                             // independiente de si el auto-trade real está activado o no.
                             if (isBacktestApexTarget(data) && levels && isFavorableTp2(levels)) {
-                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones', capital: getTradeAmount() });
+                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones', capital: getTradeAmount(), leverage: getAutoTradeLeverage() });
                             }
                         }
                     }
@@ -2407,7 +2410,7 @@ export default function PatronesPage() {
                         <div className="text-xs font-semibold text-amber-600 dark:text-amber-400 mb-4 flex items-center gap-2">
                             <span>⭐ Señales confirmadas · {filtered.length} activo{filtered.length !== 1 ? "s" : ""}</span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                        <div className="grid grid-cols-1 sm:grid-cols-1 lg:grid-cols-3 gap-5">
                             {filtered.map(c => (
                                 <PatternCard key={c.id} coin={c} result={analysisCache[c.id].data}
                                              updatedAt={analysisCache[c.id].updatedAt} />

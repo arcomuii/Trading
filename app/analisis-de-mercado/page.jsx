@@ -1,10 +1,11 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
+import { fetchKlines, fetchAllTickers } from "../lib/bitunixMarket";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-// Binance público soporta ~6000 weight/min (klines de 200 velas = 2 de weight, ≈3000
-// req/min posibles) — estas pausas son mucho más chicas que las de CoinGecko anónimo,
-// con margen de sobra.
+// Estas pausas ya eran mucho más chicas que las de CoinGecko anónimo (la fuente
+// de datos original de esta página), con margen de sobra — se mantienen igual
+// tras migrar de Binance a Bitunix como fuente de velas/tickers.
 const GAP_MS       = 1_500;
 const RETRY_DELAYS = [15_000, 30_000, 60_000];
 
@@ -259,33 +260,25 @@ function fmtSessionTime(d) {
 }
 
 // ─── Fetch velas de 30m con retry ──────────────────────────────────────────────
-// Binance público: sin API key, límite ~6000 weight/min (klines de 200 velas = 2 de
-// weight) — muchísimo más margen que CoinGecko anónimo. `symbol` es el par de Binance,
-// ej. "BTCUSDT".
+// Antes leía velas de Binance; se migró a Bitunix (fetchKlines en
+// bitunixMarket.js) para analizar la sesión sobre los mismos precios contra
+// los que realmente se opera. `symbol` es el par (ej. "BTCUSDT").
 async function fetchSessionSignal(symbol, attempt = 0) {
-    const res = await fetch(
-        `/api/binance/api/v3/klines?symbol=${symbol}&interval=30m&limit=100`
-    );
-    if (res.status === 429 || res.status === 418) {
-        // 418 = IP bloqueada temporalmente por exceso de weight (poco probable a este ritmo)
-        if (attempt < RETRY_DELAYS.length) {
-            await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
-            return fetchSessionSignal(symbol, attempt + 1);
+    let raw;
+    try {
+        raw = await fetchKlines(symbol, '30m', { limit: 100 });
+    } catch (err) {
+        if (err.message === 'RATE_LIMIT') {
+            if (attempt < RETRY_DELAYS.length) {
+                await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+                return fetchSessionSignal(symbol, attempt + 1);
+            }
         }
-        throw new Error("RATE_LIMIT");
+        throw err;
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const raw = await res.json();
-    // Binance responde un objeto (no array) con {code, msg} para símbolos inexistentes
-    if (!Array.isArray(raw) || raw.length < 5)
-        throw new Error(`insufficient:${Array.isArray(raw) ? raw.length : 0}`);
-    // Binance klines format: [openTime, open, high, low, close, volume, closeTime, ...]
-    const candles = raw.map(([openTime, , high, low, close]) => ({
-        openTime,
-        high:  parseFloat(high),
-        low:   parseFloat(low),
-        close: parseFloat(close),
-    }));
+    if (raw.length < 5)
+        throw new Error(`insufficient:${raw.length}`);
+    const candles = raw.map(({ openTime, high, low, close }) => ({ openTime, high, low, close }));
     return detectSessionProximity(candles);
 }
 
@@ -314,16 +307,10 @@ function SessionChartModal({ coin, result, onClose }) {
 
     useEffect(() => {
         const symbol = `${coin.symbol.toUpperCase()}USDT`;
-        fetch(`/api/binance/api/v3/klines?symbol=${symbol}&interval=30m&limit=100`)
-            .then(r => r.json())
+        fetchKlines(symbol, '30m', { limit: 100 })
             .then(raw => {
-                if (!Array.isArray(raw)) throw new Error(raw?.msg || "Sin datos de velas");
-                setCandles(raw.map(([openTime, open, high, low, close]) => ({
-                    openTime,
-                    open:  parseFloat(open),
-                    high:  parseFloat(high),
-                    low:   parseFloat(low),
-                    close: parseFloat(close),
+                setCandles(raw.map(({ openTime, open, high, low, close }) => ({
+                    openTime, open, high, low, close,
                 })));
             })
             .catch(err => setError(err.message));
@@ -599,21 +586,23 @@ export default function AnalisisMercadoPage() {
     }, []);
 
     // 2. Construir la lista de monedas directo desde los tickers de Bitunix, enriquecida
-    // con precio/variación 24h de Binance (una sola petición bulk).
+    // con precio/variación 24h (una sola petición bulk). Antes venía de Binance; se
+    // migró a Bitunix (fetchAllTickers en bitunixMarket.js) para usar los mismos
+    // precios contra los que realmente se opera.
     useEffect(() => {
         if (bitunixSymbols === null) return;
         let cancelled = false;
 
         const fetchTickers = async (attempt = 0) => {
-            const r = await fetch('/api/binance/api/v3/ticker/24hr');
-            if (!r.ok) {
+            try {
+                return await fetchAllTickers();
+            } catch (err) {
                 if (attempt < 2) {
                     await new Promise(res => setTimeout(res, 5_000));
                     return fetchTickers(attempt + 1);
                 }
-                throw new Error(`HTTP ${r.status}`);
+                throw err;
             }
-            return r.json();
         };
 
         const load = async () => {
@@ -623,32 +612,37 @@ export default function AnalisisMercadoPage() {
                 if (cancelled) return;
 
                 const bySymbol = {};
-                if (Array.isArray(tickers)) tickers.forEach(t => { bySymbol[t.symbol] = t; });
+                tickers.forEach(t => { bySymbol[t.symbol] = t; });
 
                 // Símbolo base (sin el prefijo "1000x"/"1Mx" que usa Bitunix para contratos
-                // con multiplicador) — Binance usa siempre el ticker real.
+                // con multiplicador) — solo para mostrar un nombre limpio. El ticker de
+                // Bitunix se lista bajo el símbolo CON el prefijo (ej. "1000CHEEMSUSDT"),
+                // así que prefixedFallback guarda el nombre original para el lookup.
                 const baseSymbols = new Set();
+                const prefixedFallback = new Map();
                 BITUNIX_TICKERS.forEach(raw => {
                     const base = raw.replace(/^1000/, '').replace(/^1M/, '');
-                    if (base) baseSymbols.add(base);
+                    if (!base) return;
+                    baseSymbols.add(base);
+                    if (base !== raw) prefixedFallback.set(base, raw);
                 });
 
                 const list = [...baseSymbols].map(sym => {
-                    const t = bySymbol[`${sym}USDT`];
+                    const t = bySymbol[`${sym}USDT`] ?? (prefixedFallback.has(sym) ? bySymbol[`${prefixedFallback.get(sym)}USDT`] : undefined);
                     return {
                         id:                          sym.toLowerCase(),
                         symbol:                      sym.toLowerCase(),
                         name:                        sym,
                         image:                       null,
-                        current_price:               t ? parseFloat(t.lastPrice) : null,
+                        current_price:               t ? t.lastPrice : null,
                         market_cap:                  null,
-                        quote_volume_24h:            t ? parseFloat(t.quoteVolume) : null,
-                        price_change_percentage_24h: t ? parseFloat(t.priceChangePercent) : null,
+                        quote_volume_24h:            t ? t.quoteVolume : null,
+                        price_change_percentage_24h: t ? t.priceChangePercent : null,
                     };
                 });
                 setCoins(list);
             } catch (err) {
-                console.error("Binance ticker error:", err);
+                console.error("Bitunix ticker error:", err);
             } finally {
                 if (!cancelled) setLoadingCoins(false);
             }

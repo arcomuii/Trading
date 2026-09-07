@@ -1,16 +1,17 @@
 'use client'
 import { useMemo, useRef, useState } from 'react'
 import { BITUNIX_TICKERS } from '../patrones-1h/page'
-import { fetchHistoricalCandles, INTERVAL_SCALE } from '../lib/binanceHistory'
+import { fetchHistoricalCandles, INTERVAL_SCALE } from '../lib/bitunixHistory'
 import { simulateSymbolTrades, applyCapitalCompounding, PATTERN_META, windowSize, apexDaysTarget } from '../lib/backtestPatternEngine'
 
 // Backtest histórico basado en la MISMA lógica de detección/validación que
 // app/patrones-1h/page.jsx (ver app/lib/backtestPatternEngine.js) — replica,
-// vela a vela (4 horas) desde el 1 de enero de hace BACKTEST_YEARS_BACK años,
-// exactamente el mismo gate que dispara logBacktestEntry/tryAutoOpenPosition en
-// vivo: ápice exactamente a 10 días + TP2 favorable (R:R ≥ 2) + checklist 100%
-// cumplido. Las ventanas de detección están escaladas ÷4 respecto al motor
-// original en 1H para cubrir el mismo lapso real con velas de 4 horas.
+// vela a vela, desde el 1 de enero de hace `yearsBack` años (1 a 5,
+// configurable en el campo "Años de historial") hasta hoy, exactamente el
+// mismo gate que dispara logBacktestEntry/tryAutoOpenPosition en vivo: ápice
+// exactamente a 10 días + TP2 favorable (R:R ≥ 2) + checklist 100% cumplido.
+// Las ventanas de detección están escaladas ÷4 respecto al motor original en
+// 1H para cubrir el mismo lapso real con velas de 4 horas.
 //
 // Corre enteramente en el navegador (sin servidor/cron en este proyecto, igual
 // que el resto de la app) — puede tardar varios minutos si se corren muchos
@@ -28,11 +29,14 @@ const DEFAULT_SYMBOLS = [
     // Mas ganadoras
         // 'AGLD', 'JOE', 'STX', 'QTUM', 'LPT', 'DASH', 'OGN', 'SOL', 'ZRX', 'NMR', 'ICX', 'ONG', 'RLC', 'ADA', 'ZEN', 'INJ', 'CHZ', 'EGLD', 'KAVA', 'DOT', 'WOO', 'FET', 'BAT', 'SAND', 'SUSHI', 'POWR', 'KNC', 'YGG', 'CVC', 'TAO', 'AAVE', 'XRP', 'ENS', 'DYDX', 'RSR', 'MINA', 'ROSE', 'DUSK', 'CELO', 'LTC', 'BAND', 'COTI', 'IOST', 'ILV', 'PUNDIX', 'CELR', 'MAV', 'HFT', 'BLZ', 'VET', 'RAY', 'IOTA', 'GLM', 'RVN', 'VTHO', 'UMA', 'NEAR', 'MTL', 'STORJ', 'IOTX', 'PHB', 'APE', 'HBAR', 'DEXE', 'ATOM', 'CAKE', 'GRT', 'ZEC', 'XVS', 'XVG', 'ANKR', 'API3', 'SSV', 'SKL', 'LSK', 'CTK', 'RARE', 'ARPA', 'REN', 'UNFI', 'STMX', 'HIGH', 'ALICE', 'UNI', 'ETC', 'APT', 'AXS', 'TWT', 'AR', 'CVX', '1INCH', 'RIF', 'YFI', 'KSM', 'HOT', 'WAVES', 'AUCTION', 'CTSI', 'GTC', 'OP', 
 
-    // Mejor Ratio
-        // 'CELO', 'XMR', 'MORPHO', 'IO', 'REZ', 'CELR', 'POL', 'BERA', 'EUL', 'DOLO', 'SCR', 'WAL', 'ZAMA', 'SPK', '0G', 'MANTA', 'GPS', 'MANTRA', 'VANA', 'ACX', 'WAVES', 'GIGGLE', 'AGIX', 'AEVO', 'CGPT', 'ERA', 'TUT', 'HEMI', 'EDEN', 'TREE', 'G', 'HOLO', 'SKY', 'TRUMP', 'WOO', 'OCEAN', 'COS', 'HBAR', 'SUI', 'DASH', 'KSM', 'BARD', 'RAD', 'AR', 'ZEN', 'MUBARAK', 'ANIME', 'SEI', 'JST', 'LQTY', 'ALICE', 'API3', 'BNB', 'KAVA', 'BLUR', 'TRB', 'SSV', 'CYBER', 'KAITO', 'SFP', 'MET', 'SYN', 'ORCA', 'ORDI', 'ZBT', 'STEEM', 'USUAL', 'STO', 'KEY', 'BTC', 'KAIA', '1000CHEEMS', 'ACH', '1INCH', 'ZRX', 'STORJ', 'SUPER', 'ZEC', 'FIDA', 'OGN', 'ENA', 'EIGEN', 'XVS', 'GMT', 'RESOLV', 'GAL', 'TON', 'PUNDIX', 'VET', 'ETHFI', 'GAS', 'ZIL', 'ICX', 'KNC', 'DIA', 'ALPINE', 'T', 'SOL', 'KLAY', 'GLM', 'RIF', 'ILV', 'AVAX', 'CVX', 'BAND', 'XVG', 'CVC', 'CAKE', 'ETH', 'IMX', 'ONT', 'XRP', 'CHZ', 'RAY', 'ENS', 'ASTR', 'NEAR', 'ID', 'JOE', 'STMX', 'OP', 'BANANA', 'FTM', 'SUN', 'WIF', 'TWT', 'BOME', 'LUMIA', 'RARE', 'WCT', 'XTZ', 'PUMP', 'METIS', '1MBABYDOGE', 
+    // Mejor Ratio 1H
+        //"CROSS", "NIGHT", "STBL", "BAS", "CTK", "F", "TREE", "TURBO", "4", "AKE", "AVGO", "H", "MSTR", "ARX", "CFG", "CRWV", "DELL", "FIGHT", "MEGA", "NBIS", "OPEN", "SPACE", "SPCX", "ZAMA", "APT", "0G", "ZIL", "G", "RVN", "CVX", "ANIME", "EWY", "FLUID", "ROSE", "CETUS", "RARE", "RAY", "THETA", "ZEREBRO", "MASK", "ACT", "BERA", "BLUR", "HYPER", "MORPHO", "VVV", "AIO", "BROCCOLI", "DOGS", "GMX", "LAB", "LYN", "MAGMA", "MAVIA", "STEEM", "TA", "TOWNS", "ZKC", "EGLD", "ENS", "STRK", "ILV", "AERO", "AXS", "ELSA", "ESPORTS", "M", "RENDER", "SPK", "DRIFT", "DOT", "NOT", "JST", "ERA", "HAEDAL", "HEI", "SIREN", "WIF", "APEX", "BABY", "CHILLGUY", "CHIP", "COAI", "CVC", "FOLKS", "HYPE", "KITE", "MANTRA", "RECALL", "ROBO", "SKR", "SXT", "SYN", "DOGE", "ARB", "FLOW", "POWR", "QTUM", "ALICE", "SUSHI", "DYM", "ETC", "FET", "MOVE", "SAHARA", "SAND", "SSV", "TLM", "XLM", "BIGTIME", "CRV", "ME", "MEME", "METIS", "NEAR", "T", "AIXBT", "ARIA", "C", "ESP", "KERNEL", "OG", "PROMPT", "PUNDIX", "Q", "REZ", "SFP", "TAC", "VANA", "XTZ", "ZRX", "ARPA", "DOLO", "SEI", "ONG", "ACU", "ASR", "CC", "CELR", "COTI", "DIA", "FORM", "LA", "PARTI", "RLC", "SYRUP", "WAL", "XNY", "BANANA", "TAO"
+    
+    // Mejor Ratio 4H
+        //"AGLD", "ARK", "BAN", "GAS", "GMT", "MANA", "ACH", "APEX", "AR", "BICO", "EDU", "HEI", "ID", "IOTX", "JELLYJELLY", "MASK", "NMR", "RIF", "ROSE", "SAPIEN", "SOLV", "SPK", "USTC", "XAI", "1MBABYDOGE", "4", "ADA", "AIO", "ALT", "ANIME", "APR", "ARPA", "AXS", "BABY", "BOME", "BR", "C98", "CHILLGUY", "CHZ", "COMP", "DOLO", "ENA", "ESPORTS", "ETH", "EUL", "EVAA", "FF", "FIDA", "G", "GLM", "H", "HAEDAL", "HBAR", "IN", "INIT", "LDO", "LISTA", "M", "MANTA", "ME", "MOCA", "MOODENG", "MORPHO", "MUBARAK", "MYX", "NAORIS", "NEAR", "NEO", "NEWT", "NOM", "OPEN", "ORDI", "PIEVERSE", "PNUT", "POL", "POWR", "PROM", "QTUM", "RUNE", "RVN", "SHELL", "SKY", "SONIC", "STEEM", "TNSR", "TREE", "TRUMP", "TWT", "UNI", "WAL", "WLD", "XPIN", "ZK", "ZORA", "ZRX", "CVC", "ZRO", "1000CHEEMS", "APE", "KAITO", "KMNO", "LTC", "STX", "MNT", "VET", "XRP", "AIN", "ANKR", "ARB", "BAND", "BIGTIME", "BLESS", "BNB", "COTI", "COW", "CRV", "DYM", "ENJ", "EPIC", "GTC", "INJ", "KNC", "NIL", "ONT", "PIPPIN", "POLYX", "PROMPT", "SENT", "SNX", "SOL", "STG", "SUN", "SUSHI", "SWARMS", "TLM", "TRB", "UB", "VIRTUAL", "W", "XLM", "XNY", "XVS", "ZIL", "FHE", "NOT", "AVAX", "BIO", "ETHW", "JUP", "LQTY"
     
     //Todos
-        "BNB", "XLM", "XMR", "CC", "LINK", "LAB", "HBAR", "AVAX", "SUI", "XAUT", "TAO", "PAXG", "ASTER", "OKB", "WLD", "ONDO", "MNT", "AAVE", "ICP", "MORPHO", "ETC", "DEXE", "QNT", "STABLE", "ATOM", "RENDER", "ALGO", "BEAT", "KAS", "JST", "ENA", "VELVET", "VVV", "APT", "INJ", "AERO", "CAKE", "LIT", "DASH", "JTO", "FET", "VET", "PENGU", "VIRTUAL", "TIA", "XRP", "GWEI", "SUN", "GRASS", "ETHFI", "STX", "SPX", "PYTH", "BSV", "XPL", "FRAX", "ZBCN", "MON", "2Z", "PIEVERSE", "JASMY", "UB", "PENDLE", "LDO", "ZRO", "STRK", "GRT", "FF", "DOGE", "CHZ", "WIF", "AXS", "EIGEN", "RAY", "ENS", "SYRUP", "IOTA", "COMP", "TWT", "KAITO", "SKYAI", "NEO", "DYDX", "THETA", "MANA", "BAT", "SAND", "BAS", "AR", "GALA", "BILL", "SFP", "TAC", "TAG", "AWE", "IMX", "CVX", "ZK", "A", "KMNO", "GLM", "1INCH", "SENT", "RE", "MET", "ATH", "BANANAS31", "ZEC", "FORM", "MAGMA", "RAVE", "SYN", "LPT", "WAL", "SNX", "EGLD", "ARKM", "GAS", "QTUM", "RSR", "USELESS", "ORCA", "RIVER", "HOME", "RIF", "MELANIA", "ALLO", "Q", "ZRX", "FLUID", "ORDI", "ZAMA", "RVN", "SIREN", "SAFE", "BIO", "SOON", "NMR", "PLUME", "IO", "YFI", "ALCH", "ICNT", "BERA", "ENJ", "ZIL", "JELLYJELLY", "KSM", "GMX", "HOT", "LINEA", "CYS", "ZETA", "BRETT", "SPK", "COAI", "APR", "MINA", "AXL", "POLYX", "IDOL", "ROSE", "DUSK", "0G", "KAVA", "CKB", "BARD", "FLOW", "POPCAT", "ASTR", "ZEREBRO", "XVS", "ESP", "BLUR", "BR", "CELO", "SUSHI", "DEEP", "RED", "MANTA", "GPS", "MOODENG", "TRB", "TRIA", "HUMA", "AZTEC", "SAHARA", "ROBO", "NOT", "KGEN", "PROVE", "XVG", "SQD", "VTHO", "CROSS", "NXPC", "MMT", "MOCA", "ANKR", "MANTRA", "FOGO", "ZEST", "UMA", "VANA", "FOLKS", "AT", "ZORA", "MEW", "TRUTH", "LTC", "RPL", "API3", "USTC", "POWR", "ACX", "AVNT", "SSV", "IRYS", "BOME", "HIVE", "OCEAN", "ICX", "BNT", "CATI", "NOW", "WAVES", "SKR", "REZ", "BAND", "PEOPLE", "ZBT", "OPG", "GIGGLE", "ACU", "COTI", "EUL", "IOST", "NAORIS", "EDU", "MERL", "ETHW", "XAN", "AUCTION", "GMT", "NEAR", "ILV", "STG", "CYBER", "STEEM", "ONG", "CARV", "FIDA", "PUNDIX", "B2", "MTL", "SKL", "ARK", "RLC", "XPIN", "BNX", "CTSI", "LSK", "PROM", "SIGN", "LISTA", "AIXBT", "AGIX", "KNC", "WAXP", "EWT", "BREV", "BCH", "SAPIEN", "LQTY", "YGG", "AEVO", "CTK", "SXT", "MYX", "USUAL", "CGPT", "CVC", "SPELL", "SLP", "LUMIA", "BLUAI", "NIL", "SOMI", "TRX", "CTR", "PIPPIN", "MAGIC", "CETUS", "INX", "YB", "AGLD", "MOVR", "ERA", "WET", "BLESS", "CHR", "BIGTIME", "LAYER", "BICO", "FLOCK", "AIOT", "TA", "HEI", "DOT", "ZKC", "TAIKO", "XNY", "C98", "DIA", "ENSO", "LA", "OG", "XAI", "BLEND", "DOLO", "PARTI", "TNSR", "KERNEL", "HMSTR", "DOOD", "ON", "FIL", "STORJ", "GUN", "RAD", "CELR", "PORTAL", "NEWT", "STO", "MUBARAK", "OGN", "RARE", "GRIFFAIN", "ELSA", "DRIFT", "TRUST", "MAV", "CHILLGUY", "DYM", "MITO", "AKE", "TUT", "4", "RESOLV", "RECALL", "WCT", "MAVIA", "ARPA", "LYN", "ASR", "HFT", "COOKIE", "GAL", "SWARMS", "VANRY", "TRADOOR", "ANTHROPIC", "TLM", "V", "GTC", "SHELL", "SAGA", "AVA", "AIA", "VIC", "BTR", "TAKE", "ESPORTS", "FHE", "XEM", "EVAA", "HEMI", "MU", "SOLV", "EPIC", "KOMA", "MLN", "TOWNS", "NFP", "BLZ", "ALPINE", "REN", "HAEDAL", "XPT", "COIN", "OPN", "ACT", "OPENAI", "ZKP", "MASK", "SNDK", "FRONT", "XTZ", "PTB", "IOTX", "PRL", "PUMP", "ONT", "DRAM", "KAT", "KITE", "BAN", "T", "PI", "ACE", "CORE", "ID", "FARTCOIN", "UP", "SLX", "UNFI", "PHB", "BABY", "SPACE", "EDEN", "JUP", "DIS", "BMT", "FIGHT", "SOPH", "BOND", "COST", "JOE", "HD", "M", "APEX", "DOGS", "KEY", "S", "ARIA", "TURTLE", "BASED", "ADA", "LOOM", "SPCX", "TURBO", "TST", "AIN", "COS", "XAU", "POL", "MEGA", "UAI", "SONIC", "SOL", "CLO", "HANA", "BTW", "PNUT", "NIGHT", "GUA", "GOAT", "BROCCOLI", "GENIUS", "STMX", "SUPER", "OP", "ZEN", "TREE", "ORCL", "BSB", "TOSHI", "IN", "NOM", "ME", "COMBO", "XPD", "LIGHT", "POWER", "G", "PIXEL", "HOLO", "PROMPT", "BTC", "H", "RUNE", "THE", "TEST", "F", "COW", "COPPER", "CFX", "B", "ANIME", "W", "TON", "OPEN", "MEME", "KAIA", "CLANKER", "C", "SKY", "MSTR", "US", "BANK", "ORBS", "BB", "ARB", "WLFI", "WOO", "TSLA", "DAR", "CHIP", "1000BONK", "ALT", "USAR", "AMD", "INTC", "ZM", "CRCL", "TRUMP", "1000SATS", "SEI", "O", "ARX", "HYPER", "ETH", "AAOI", "CBRS", "METIS", "BIRB", "NBIS", "CRO", "ACH", "HIGH", "STBL", "ALICE", "SMCI", "PLTR", "LITE", "BANANA", "QCOM", "NFLX", "NVDA", "AIO", "MRVL", "CRM", "CRWD", "GOOGL", "MSFT", "CRWV", "SPY", "AMZN", "1000CAT", "BABA", "ASTS", "KLAY", "FLNC", "APE", "AMAT", "HYPE", "AAPL", "GLW", "CRV", "META", "ORDER", "LLY", "COLLECT", "IREN", "EWY", "1MBABYDOGE", "1000SHIB", "RIVN", "MATIC", "JCT", "UNI", "1000RATS", "USO", "INIT", "AVGO", "CFG", "MOVE", "RKLB", "DOG", "BE", "ONE", "QQQ", "ASML", "MIRA", "DELL", "SCR", "1000CHEEMS", "TSM", "FTM",
+        "0G", "1000BONK", "1000CAT", "1000CHEEMS", "1000RATS", "1000SATS", "1000SHIB", "1INCH", "1MBABYDOGE", "2Z", "4", "AAVE", "ACE", "ACH", "ACT", "ACU", "ACX", "ADA", "AEVO", "AERO", "AGIX", "AGLD", "AIA", "AIN", "AIO", "AIOT", "AIXBT", "AKE", "ALCH", "ALICE", "ALGO", "ALLO", "ALPINE", "ALT", "ANIME", "ANKR", "APE", "APEX", "API3", "APR", "APT", "AR", "ARB", "ARIA", "ARK", "ARKM", "ARPA", "ARX", "ASR", "ASTER", "ASTR", "AT", "ATH", "ATOM", "AUCTION", "AVA", "AVAX", "AVNT", "AWE", "AXL", "AXS", "AZTEC", "B2", "BABY", "BAN", "BANANA", "BANANAS31", "BAND", "BANK", "BAS", "BASED", "BAT", "BB", "BCH", "BEAT", "BERA", "BICO", "BIGTIME", "BIO", "BIRB", "BLEND", "BLESS", "BLUAI", "BLUR", "BLZ", "BMT", "BNB", "BNT", "BNX", "BOME", "BOND", "BR", "BRETT", "BREV", "BROCCOLI", "BSB", "BSV", "BTC", "BTR", "BTW", "C98", "CAKE", "CARV", "CATI", "CBRS", "CC", "CELO", "CELR", "CETUS", "CFG", "CFX", "CGPT", "CHILLGUY", "CHIP", "CHR", "CHZ", "CKB", "CLANKER", "CLO", "COAI", "COLLECT", "COMBO", "COMP", "COOKIE", "COPPER", "CORE", "COS", "COTI", "COW", "CRCL", "CRO", "CROSS", "CRV", "CRWV", "CTK", "CTR", "CTSI", "CVC", "CVX", "CYBER", "CYS", "DAR", "DASH", "DEEP", "DEXE", "DIA", "DOG", "DOGE", "DOGS", "DOLO", "DOOD", "DOT", "DRAM", "DRIFT", "DUSK", "DYDX", "DYM", "EDEN", "EDU", "EGLD", "EIGEN", "ELSA", "ENA", "ENJ", "ENS", "ENSO", "EPIC", "ERA", "ESP", "ESPORTS", "ETC", "ETH", "ETHFI", "ETHW", "EUL", "EVAA", "EWT", "FARTCOIN", "FET", "FF", "FHE", "FIDA", "FIGHT", "FIL", "FLNC", "FLOCK", "FLOW", "FLUID", "FOGO", "FOLKS", "FORM", "FRAX", "FRONT", "FTM", "G", "GAL", "GALA", "GAS", "GENIUS", "GIGGLE", "GLM", "GMT", "GMX", "GOAT", "GPS", "GRASS", "GRIFFAIN", "GRT", "GTC", "GUA", "GUN", "GWEI", "H", "HAEDAL", "HANA", "HBAR", "HEI", "HEMI", "HFT", "HIGH", "HIVE", "HOLO", "HOME", "HOT", "HUMA", "HYPE", "HYPER", "ICNT", "ICP", "ICX", "ID", "IDOL", "ILV", "IMX", "IN", "INIT", "INJ", "INX", "IO", "IOST", "IOTA", "IOTX", "IRYS", "JASMY", "JCT", "JELLYJELLY", "JOE", "JST", "JTO", "JUP", "KAIA", "KAITO", "KAS", "KAT", "KAVA", "KERNEL", "KEY", "KGEN", "KITE", "KLAY", "KMNO", "KNC", "KOMA", "KSM", "LA", "LAB", "LAYER", "LDO", "LIGHT", "LINEA", "LINK", "LISTA", "LIT", "LITE", "LOOM", "LPT", "LQTY", "LSK", "LTC", "LUMIA", "LYN", "MAGIC", "MAGMA", "MANA", "MANTA", "MANTRA", "MASK", "MATIC", "MAV", "MAVIA", "ME", "MEGA", "MELANIA", "MEME", "MERL", "MET", "METIS", "MEW", "MINA", "MIRA", "MITO", "MLN", "MMT", "MNT", "MOCA", "MON", "MOODENG", "MORPHO", "MOVE", "MOVR", "MTL", "MUBARAK", "MYX", "NAORIS", "NBIS", "NEAR", "NEO", "NEWT", "NFP", "NIGHT", "NIL", "NMR", "NOM", "NOT", "NOW", "NXPC", "OCEAN", "OG", "OGN", "OKB", "ONDO", "ONE", "ONG", "ONT", "OP", "OPEN", "OPG", "OPN", "ORBS", "ORCA", "ORDER", "ORDI", "PARTI", "PAXG", "PENDLE", "PENGU", "PEOPLE", "PHB", "PI", "PIEVERSE", "PIPPIN", "PIXEL", "PLUME", "PNUT", "POL", "POLYX", "POPCAT", "PORTAL", "POWER", "POWR", "PRL", "PROM", "PROMPT", "PROVE", "PTB", "PUMP", "PUNDIX", "PYTH", "QNT", "QTUM", "RAD", "RARE", "RAVE", "RAY", "RE", "RECALL", "RED", "REN", "RENDER", "RESOLV", "REZ", "RIF", "RIVER", "RLC", "ROBO", "ROSE", "RPL", "RSR", "RUNE", "RVN", "SAFE", "SAGA", "SAHARA", "SAND", "SAPIEN", "SCR", "SEI", "SENT", "SFP", "SHELL", "SIGN", "SIREN", "SKL", "SKR", "SKY", "SKYAI", "SLP", "SLX", "SNX", "SOL", "SOLV", "SOMI", "SONIC", "SOON", "SOPH", "SPACE", "SPCX", "SPELL", "SPK", "SQD", "SSV", "STABLE", "STBL", "STEEM", "STG", "STMX", "STO", "STORJ", "STRK", "STX", "SUI", "SUN", "SUPER", "SUSHI", "SWARMS", "SXT", "SYN", "SYRUP", "TA", "TAC", "TAG", "TAIKO", "TAKE", "TAO", "TEST", "THE", "THETA", "TIA", "TLM", "TNSR", "TON", "TOSHI", "TOWNS", "TRADOOR", "TRB", "TREE", "TRIA", "TRUMP", "TRUST", "TRUTH", "TRX", "TST", "TURBO", "TURTLE", "TUT", "TWT", "UAI", "UB", "UMA", "UNFI", "UNI", "UP", "US", "USAR", "USELESS", "USTC", "USUAL", "VANA", "VANRY", "VELVET", "VET", "VIC", "VIRTUAL", "VTHO", "VVV", "W", "WAL", "WAVES", "WAXP", "WCT", "WET", "WIF", "WLD", "WLFI", "WOO", "XAI", "XAN", "XAUT", "XEM", "XLM", "XMR", "XNY", "XPIN", "XPL", "XRP", "XTZ", "XVG", "XVS", "YB", "YFI", "YGG", "ZAMA", "ZBCN", "ZBT", "ZEC", "ZEN", "ZEREBRO", "ZEST", "ZETA", "ZIL", "ZK", "ZKC", "ZKP", "ZORA", "ZRO", "ZRX"
 ].join(', ')
 
 function normalizeSymbol(raw) {
@@ -71,18 +75,22 @@ function fmtDay(ms) {
     return new Date(ms).toLocaleDateString('es-MX', { dateStyle: 'medium', timeZone: 'America/Mexico_City' })
 }
 
-const BACKTEST_YEARS_BACK = 1
+const DEFAULT_YEARS_BACK = 1
+const MIN_YEARS_BACK = 1
+const MAX_YEARS_BACK = 5
 
-// 1 de enero de hace BACKTEST_YEARS_BACK años (ej. si hoy es 2026 y vale 3,
-// arranca en 2023-01-01).
-function backtestStartMs() {
+// 1 de enero de hace `yearsBack` años (ej. si hoy es 2026 y vale 3, arranca
+// en 2023-01-01). Antes era una constante fija (BACKTEST_YEARS_BACK); ahora
+// es configurable desde el campo "Años de historial" (1 a 5).
+function backtestStartMs(yearsBack) {
     const now = new Date()
-    return new Date(now.getFullYear() - BACKTEST_YEARS_BACK, 0, 1).getTime()
+    return new Date(now.getFullYear() - yearsBack, 0, 1).getTime()
 }
 
 export default function BacktestHistoricoPage() {
     const [symbolsText, setSymbolsText] = useState(DEFAULT_SYMBOLS)
     const [candleInterval, setCandleInterval] = useState('4h')
+    const [yearsBack, setYearsBack] = useState(DEFAULT_YEARS_BACK)
     const [leverage, setLeverage] = useState(2)
     const [initialTotalCapital, setInitialTotalCapital] = useState(100)
     const [initialPerTradeCapital, setInitialPerTradeCapital] = useState(2)
@@ -111,7 +119,7 @@ export default function BacktestHistoricoPage() {
         stopRef.current = false
 
         const endMs   = Date.now()
-        const startMs = backtestStartMs() - LOOKBACK_BUFFER_DAYS * 24 * 3_600_000
+        const startMs = backtestStartMs(yearsBack) - LOOKBACK_BUFFER_DAYS * 24 * 3_600_000
 
         for (let idx = 0; idx < symbols.length; idx++) {
             if (stopRef.current) break
@@ -129,7 +137,7 @@ export default function BacktestHistoricoPage() {
                 }
             } catch (err) {
                 // Símbolos que marcan error se quitan solos de la lista — normalmente
-                // significa que el ticker no existe en Binance con ese nombre.
+                // significa que el ticker no existe en Bitunix con ese nombre.
                 setSymbolStatus(s => ({ ...s, [symbol]: `error: ${err.message}` }))
                 setSymbolsText(prev => removeSymbolFromText(prev, symbol))
             }
@@ -215,7 +223,7 @@ export default function BacktestHistoricoPage() {
         if (closeEvents.length === 0) return []
 
         const MS_PER_DAY = 24 * 3_600_000
-        const firstDay = Math.floor(backtestStartMs() / MS_PER_DAY) * MS_PER_DAY
+        const firstDay = Math.floor(backtestStartMs(yearsBack) / MS_PER_DAY) * MS_PER_DAY
         const lastDay  = Math.floor(Date.now() / MS_PER_DAY) * MS_PER_DAY
 
         const days = []
@@ -232,7 +240,7 @@ export default function BacktestHistoricoPage() {
             days.push({ date: day, capital, closesToday })
         }
         return days
-    }, [executed, initialTotalCapital])
+    }, [executed, initialTotalCapital, yearsBack])
 
     // Ascendente (más viejo primero): la tabla debe leerse en el mismo orden en
     // que corre el backtest (desde hace 3 años hacia hoy), no al revés.
@@ -241,10 +249,10 @@ export default function BacktestHistoricoPage() {
     return (
         <div className="p-6 space-y-6">
             <div>
-                <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">Backtest histórico ({BACKTEST_YEARS_BACK} años · patrones, velas {candleInterval.toUpperCase()})</h1>
+                <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">Backtest histórico ({yearsBack} año{yearsBack !== 1 ? 's' : ''} · patrones, velas {candleInterval.toUpperCase()})</h1>
                 <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
                     Corre la misma detección y checklist de <code className="text-xs">/patrones-1h</code> desde
-                    el 1 de enero de hace {BACKTEST_YEARS_BACK} años, buscando ápice exactamente a {apexDaysTarget(INTERVAL_SCALE[candleInterval])} (equivalente a 10 días en velas de 1H) con TP2 favorable (R:R ≥ 2).
+                    el 1 de enero de hace {yearsBack} año{yearsBack !== 1 ? 's' : ''}, buscando ápice exactamente a {apexDaysTarget(INTERVAL_SCALE[candleInterval])} (equivalente a 10 días en velas de 1H) con TP2 favorable (R:R ≥ 2).
                     Apalancamiento {leverage}× sobre un capital que empieza en ${initialTotalCapital} y ${initialPerTradeCapital}/operación
                     (sube ${perTradeStep} cada vez que el capital total sube ${capitalStep}).
                 </p>
@@ -274,6 +282,26 @@ export default function BacktestHistoricoPage() {
                         1H = mismas ventanas de detección que el motor original (más lento de correr, más señales).
                         4H = ventanas escaladas ÷4 para cubrir el mismo lapso real con menos velas por símbolo.
                         1D = ventanas sin escalar (igual que 1H) pero en días — consolidación ~2 meses, historial ~5 años por símbolo.
+                    </p>
+                </div>
+
+                <div>
+                    <label className="text-xs font-semibold text-gray-500 dark:text-slate-400 block mb-1">
+                        Años de historial a analizar ({MIN_YEARS_BACK}-{MAX_YEARS_BACK})
+                    </label>
+                    <input
+                        type="number" min={MIN_YEARS_BACK} max={MAX_YEARS_BACK} step={1}
+                        value={yearsBack}
+                        onChange={e => {
+                            const n = parseInt(e.target.value, 10)
+                            if (!Number.isFinite(n)) return
+                            setYearsBack(Math.min(MAX_YEARS_BACK, Math.max(MIN_YEARS_BACK, n)))
+                        }}
+                        disabled={running}
+                        className="w-24 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
+                    />
+                    <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1">
+                        Corre desde el 1 de enero de hace tantos años hasta hoy. Más años = más velas por símbolo y una corrida más lenta.
                     </p>
                 </div>
 
@@ -309,7 +337,7 @@ export default function BacktestHistoricoPage() {
                             value={initialTotalCapital}
                             onChange={e => setInitialTotalCapital(parseFloat(e.target.value) || 0)}
                             disabled={running}
-                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
+                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
                         />
                     </label>
                     <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
@@ -319,7 +347,7 @@ export default function BacktestHistoricoPage() {
                             value={initialPerTradeCapital}
                             onChange={e => setInitialPerTradeCapital(parseFloat(e.target.value) || 0)}
                             disabled={running}
-                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
+                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
                         />
                     </label>
                     <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
@@ -329,7 +357,7 @@ export default function BacktestHistoricoPage() {
                             value={capitalStep}
                             onChange={e => setCapitalStep(parseFloat(e.target.value) || 1)}
                             disabled={running}
-                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
+                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
                         />
                     </label>
                     <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
@@ -339,7 +367,7 @@ export default function BacktestHistoricoPage() {
                             value={perTradeStep}
                             onChange={e => setPerTradeStep(parseFloat(e.target.value) || 0)}
                             disabled={running}
-                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
+                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
                         />
                     </label>
                     <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
@@ -349,7 +377,7 @@ export default function BacktestHistoricoPage() {
                             value={leverage}
                             onChange={e => setLeverage(parseFloat(e.target.value) || 1)}
                             disabled={running}
-                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
+                            className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
                         />
                     </label>
                 </div>
