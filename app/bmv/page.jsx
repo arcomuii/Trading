@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from "react";
+import { mirrorToRemote } from "../lib/remoteStore";
 
 const DEFAULT_STOCKS = [
     { symbol: "TRAXIONA.MX", label: "TRAXION/A", name: "Traxión" },
@@ -26,10 +27,12 @@ function loadCustom() {
 
 function savePortfolio(data) {
     localStorage.setItem(LS_PORTFOLIO, JSON.stringify(data));
+    mirrorToRemote(LS_PORTFOLIO, data);
 }
 
 function saveCustom(data) {
     localStorage.setItem(LS_CUSTOM, JSON.stringify(data));
+    mirrorToRemote(LS_CUSTOM, data);
 }
 
 function normalizeTicker(raw) {

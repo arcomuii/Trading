@@ -4,6 +4,8 @@
 // está abierta (no hay cron/servidor en este proyecto) — se invoca desde el
 // mismo runScan que ya dispara las notificaciones/correos de patrón.
 
+import { mirrorToRemote } from './remoteStore';
+
 export const DISPLAY_APEX_DAYS     = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // qué se muestra en los resultados de las páginas de patrones
 export const BACKTEST_APEX_DAYS    = [10]; // registro en el log de backtesting
 export const AUTO_MAX_LEVERAGE     = 20; // tope al que se escala si Bitunix rechaza la orden (no configurable)
@@ -92,7 +94,10 @@ export function getTradeAmount() {
 export function setTradeAmount(amount) {
     if (typeof window === 'undefined') return;
     const n = parseFloat(amount);
-    if (Number.isFinite(n) && n > 0) localStorage.setItem(TRADE_AMOUNT_LS_KEY, String(n));
+    if (Number.isFinite(n) && n > 0) {
+        localStorage.setItem(TRADE_AMOUNT_LS_KEY, String(n));
+        mirrorToRemote(TRADE_AMOUNT_LS_KEY, n);
+    }
 }
 
 // Switch para activar/desactivar la apertura automática de posiciones, sin
@@ -107,7 +112,9 @@ export function isAutoTradeEnabled() {
 
 export function setAutoTradeEnabled(enabled) {
     if (typeof window === 'undefined') return;
-    localStorage.setItem(AUTO_TRADE_ENABLED_LS_KEY, enabled ? 'true' : 'false');
+    const value = enabled ? 'true' : 'false';
+    localStorage.setItem(AUTO_TRADE_ENABLED_LS_KEY, value);
+    mirrorToRemote(AUTO_TRADE_ENABLED_LS_KEY, value);
 }
 
 // Días de ápice (1-10) que activan la apertura automática. Persistido en
@@ -123,8 +130,10 @@ export function getAutoTradeApexDays() {
 export function setAutoTradeApexDays(days) {
     if (typeof window === 'undefined') return;
     const n = parseInt(days, 10);
-    if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS)
+    if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS) {
         localStorage.setItem(AUTO_TRADE_APEX_DAYS_LS_KEY, String(n));
+        mirrorToRemote(AUTO_TRADE_APEX_DAYS_LS_KEY, n);
+    }
 }
 
 // Apalancamiento inicial (1-10) para aperturas automáticas Y para el modal
@@ -143,8 +152,10 @@ export function getAutoTradeLeverage() {
 export function setAutoTradeLeverage(leverage) {
     if (typeof window === 'undefined') return;
     const n = parseInt(leverage, 10);
-    if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE)
+    if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE) {
         localStorage.setItem(AUTO_TRADE_LEVERAGE_LS_KEY, String(n));
+        mirrorToRemote(AUTO_TRADE_LEVERAGE_LS_KEY, n);
+    }
 }
 
 // Usado para decidir la apertura automática — ápice configurable (ver getAutoTradeApexDays).

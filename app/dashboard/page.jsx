@@ -2,24 +2,56 @@
 import { useState, useEffect } from 'react'
 import { fetchBacktestLog } from '../lib/backtestLog'
 import { DEFAULT_AUTO_TRADE_LEVERAGE } from '../lib/autoTrade'
+import { mirrorToRemote, fetchFromRemote } from '../lib/remoteStore'
 
-// ── localStorage ───────────────────────────────────────────────
+// ── localStorage + espejo remoto ─────────────────────────────────
+// El historial de equity se graba desde CUALQUIER dispositivo que tenga esta
+// pestaña abierta (cada uno hace su propio snapshot cada minuto), así que
+// distintos dispositivos pueden tener días distintos. loadHistory combina lo
+// que haya en este navegador con lo que haya en el servidor (unión por
+// fecha) y reconcilia ambos lados, para que el dashboard muestre lo mismo sin
+// importar desde dónde se abra — antes solo leía el localStorage de ESE
+// navegador, por eso un dispositivo nuevo veía todo vacío aunque el servidor
+// ya tuviera el historial real.
 const LS_KEY = 'trading_equity_history'
 
-function loadHistory() {
+function readLocal() {
     if (typeof window === 'undefined') return []
     try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '[]') } catch { return [] }
 }
 
-function upsertSnapshot(equity) {
+// Une dos historiales por fecha (b gana en caso de choque) y recorta a 90 días.
+function mergeHistories(a, b) {
+    const map = new Map(a.map(e => [e.date, e.equity]))
+    for (const e of b) map.set(e.date, e.equity)
+    return [...map.entries()]
+        .map(([date, equity]) => ({ date, equity }))
+        .sort((x, y) => x.date.localeCompare(y.date))
+        .slice(-90)
+}
+
+async function loadHistory() {
+    if (typeof window === 'undefined') return []
+    const local  = readLocal()
+    const remote = await fetchFromRemote(LS_KEY, [])
+    const merged = mergeHistories(local, Array.isArray(remote) ? remote : [])
+    // Reconcilia ambos lados: este dispositivo puede tener días que el
+    // servidor no tenía (y viceversa) — así convergen los dos.
+    localStorage.setItem(LS_KEY, JSON.stringify(merged))
+    mirrorToRemote(LS_KEY, merged)
+    return merged
+}
+
+function upsertSnapshot(equity, base) {
     const d    = cdmxDateStr()
-    const hist = loadHistory()
+    const hist = [...base]
     const idx  = hist.findIndex(e => e.date === d)
     if (idx >= 0) hist[idx].equity = equity
     else hist.push({ date: d, equity })
     hist.sort((a, b) => a.date.localeCompare(b.date))
     const out = hist.slice(-90)
     localStorage.setItem(LS_KEY, JSON.stringify(out))
+    mirrorToRemote(LS_KEY, out)
     return out
 }
 
@@ -459,7 +491,8 @@ export default function DashboardPage() {
     useEffect(() => {
         const run = async () => {
             // Load history first so charts render immediately with cached data
-            const hist = loadHistory()
+            // (combina localStorage + espejo remoto — ver loadHistory arriba)
+            const hist = await loadHistory()
             setHistory(hist)
 
             try {
@@ -484,7 +517,7 @@ export default function DashboardPage() {
                 ].reduce((s, v) => s + parseFloat(v ?? 0), 0)
 
                 setEquity(total)
-                const updated = upsertSnapshot(total)
+                const updated = upsertSnapshot(total, hist)
                 setHistory(updated)
                 setLastFetch(new Date())
             } catch (err) {
@@ -542,8 +575,8 @@ export default function DashboardPage() {
     const cutoff = addDaysToDateStr(todayStr, -30)
     const hist30 = history.filter(e => e.date >= cutoff)
     const pnlSer = buildPnlSeries(hist30)
-    const monthly = buildMonthlyMap(history)
-    const weekly  = buildWeeklyMap(history)
+    const monthly = buildMonthlyMap(history).slice(0, 12)
+    const weekly  = buildWeeklyMap(history).slice(0, 12)
     const fx = getForexSessionHours()
     const nowTick    = new Date()
     const londonIsOpen = isWeekdayInZone(nowTick, 'Europe/London')     && nowTick >= fx.londonOpen && nowTick < fx.londonClose

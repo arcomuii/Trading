@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { CandlestickChart } from "../../components/CandlestickChart";
 import { fetchKlines } from "../lib/bitunixMarket";
+import { mirrorToRemote } from "../lib/remoteStore";
 
 // lightweight-charts renderiza las marcas de tiempo como si fueran UTC. México
 // (America/Mexico_City) dejó el horario de verano desde 2022 → siempre UTC-6,
@@ -595,6 +596,7 @@ function loadJson(key, fallback) {
 
 function saveJson(key, value) {
     try { window.localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    mirrorToRemote(key, value);
 }
 
 // Inicio de la vela actual de una temporalidad, alineado a la rejilla real

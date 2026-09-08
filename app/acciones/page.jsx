@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
+import { mirrorToRemote } from '../lib/remoteStore'
 
 const DEFAULT_STOCKS = [
     { symbol: 'AAPL',  label: 'AAPL',  name: 'Apple' },
@@ -24,8 +25,8 @@ function loadCustom() {
     try { return JSON.parse(localStorage.getItem(LS_CUSTOM) ?? '[]') }
     catch { return [] }
 }
-function savePortfolio(data) { localStorage.setItem(LS_PORTFOLIO, JSON.stringify(data)) }
-function saveCustom(data)    { localStorage.setItem(LS_CUSTOM,    JSON.stringify(data)) }
+function savePortfolio(data) { localStorage.setItem(LS_PORTFOLIO, JSON.stringify(data)); mirrorToRemote(LS_PORTFOLIO, data) }
+function saveCustom(data)    { localStorage.setItem(LS_CUSTOM,    JSON.stringify(data)); mirrorToRemote(LS_CUSTOM, data) }
 
 function normalizeTicker(raw) { return raw.trim().toUpperCase() }
 
