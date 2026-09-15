@@ -6,6 +6,16 @@ const BITUNIX_SECRET       = process.env.BITUNIX_SECRET  || 'fb29ee282e536d6dc05
 const BITUNIX_FUTURES_BASE = 'https://fapi.bitunix.com'
 const BITUNIX_SPOT_BASE    = 'https://openapi.bitunix.com'
 
+// Sin esto, un fetch() con un socket colgado (típico después de que se cae y
+// vuelve la conexión a internet: el pool de conexiones de Node/undici se
+// queda con sockets muertos que nunca truena ni resuelve) se queda esperando
+// para siempre — ninguna página que dependa de Bitunix vuelve a responder
+// hasta reiniciar el proceso a mano. Con el timeout, en vez de colgarse
+// indefinidamente, el fetch aborta a los 15s y esta ruta devuelve 502 (ya
+// manejado más abajo), así que el próximo intento (el usuario reintentando,
+// o el siguiente ciclo de un poller) usa una conexión nueva.
+const FETCH_TIMEOUT_MS = 15_000
+
 export async function GET(request, { params }) {
   const segments   = params.path || []
   const targetPath = '/' + segments.join('/')
@@ -37,7 +47,7 @@ export async function GET(request, { params }) {
   }
 
   try {
-    const res  = await fetch(targetUrl, { headers })
+    const res  = await fetch(targetUrl, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (err) {
@@ -76,7 +86,7 @@ export async function POST(request, { params }) {
   }
 
   try {
-    const res  = await fetch(targetUrl, { method: 'POST', headers, body: rawBody })
+    const res  = await fetch(targetUrl, { method: 'POST', headers, body: rawBody, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (err) {

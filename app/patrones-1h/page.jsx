@@ -1859,7 +1859,9 @@ export default function PatronesPage() {
     const foundCoins    = coins.filter(c => c.current_price != null);
     const unmatchedSyms = coins.filter(c => c.current_price == null).map(c => c.symbol.toUpperCase()).sort();
 
-    // Scan inicia solo con el botón "Actualizar ahora"
+    // Scan también inicia solo al cargar la página (ver efecto "Scan
+    // automático al cargar" más abajo) o cada :00/:30, además del botón
+    // "Actualizar ahora".
 
     // Cleanup: invalida cualquier scan en vuelo al desmontar
     useEffect(() => () => { scanGenRef.current++; }, []);
@@ -1986,6 +1988,20 @@ export default function PatronesPage() {
         scheduleNext();
         return () => clearTimeout(timeoutId);
     }, []);
+
+    // ─── Scan automático al cargar la página (no esperar al primer :00/:30) ──
+    // Dispara en cuanto los tickers de Bitunix terminan de cargar (foundCoins
+    // pasa de 0 a N). El ref evita que se repita si foundCoins cambia después
+    // (ej. algún ticker deja de tener precio) — solo debe correr una vez, al
+    // entrar a la página.
+    const autoScannedOnLoadRef = useRef(false);
+    useEffect(() => {
+        if (autoScannedOnLoadRef.current) return;
+        if (scanRunningRef.current) return;
+        if (foundCoins.length === 0) return;
+        autoScannedOnLoadRef.current = true;
+        runScanRef.current?.(foundCoins);
+    }, [foundCoins.length]);
 
     // ─── Derive displayed patterns ────────────────────────────────────────────
     const allPatterns = coins

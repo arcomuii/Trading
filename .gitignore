@@ -4,3 +4,6 @@ node_modules/
 .env.local
 out/
 /data/
+# Generado por node-windows al instalar el servicio (install-service.js) —
+# wrapper .exe + config, específico de esta máquina.
+/daemon/

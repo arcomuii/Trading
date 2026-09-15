@@ -32,8 +32,7 @@ function msUntilNextHalfHour() {
 // Exportado (además de usarse local) para que app/backtest-historico/page.jsx
 // pueda ofrecer el mismo universo de símbolos sin duplicar la lista.
 export const BITUNIX_TICKERS = [
-    //'ARK', 'AR', 'BAN', 'BR', 'CHILLGUY', 'EDU', 'MANA', 'ADA', 'GAS', 'GMT', 'POL', 'WOO', '1000RATS', 'ACH', 'APEX', 'ARKM', 'CYBER', 'DOLO', 'DYDX', 'GLM', 'HBAR', 'ID', 'JELLYJELLY', 'MASK', 'MOCA', 'NEAR', 'PIEVERSE', 'RIF', 'SONIC', 'SPK', 'TAC', '1MBABYDOGE', 'AIOT', 'ALPINE', 'ANIME', 'API3', 'APR', 'APT', 'ARPA', 'AXS', 'BABY', 'BLUAI', 'C98', 'CELO', 'COLLECT', 'COMP', 'CTK', 'CYS', 'ERA', 'ESPORTS', 'ETH', 'EVAA', 'FF', 'FIL', 'G', 'GWEI', 'H', 'HAEDAL', 'HUMA', 'IN', 'INIT', 'IOTA', 'KAIA', 'KOMA', 'KSM', 'LDO', 'ME', 'MET', 'MITO', 'MYX', 'NAORIS', 'NEO', 'NEWT', 'NOM', 'OP', 'OPEN', 'ORDI', 'PLUME', 'POWR', 'PROM', 'QTUM', 'REZ', 'RUNE', 'SCR', 'SHELL', 'SKR', 'SKY', 'STABLE', 'STEEM', 'TRIA', 'TRUMP', 'TURBO', 'TWT', 'UNI', 'VELVET', 'WAL', 'WIF', 'XPIN', 'ZEN', 'ZRX', 'ENA', 'SOL', '1000CHEEMS', 'AGLD', 'AIN', 'APE', 'BICO', 'BOME', 'CVC', 'EUL', 'IOTX', 'KMNO', 'LTC', 'NMR', 'PUMP', 'SNX', 'STO', 'TIA', 'HEI', 'AVAX', 'ETHFI', 'KAITO', 'MNT', 'PNUT', 'STG', 'STX', 'VET', 'XAI', 'XRP', 'ACT', 'ANKR', 'ARB', 'BIGTIME', 'BRETT', 'CHZ', 'COW', 'CRV', 'ENJ', 'EPIC', 'FLOCK', 'GALA', 'GOAT', 'GRASS', 'GRIFFAIN', 'GTC', 'GUA', 'HOT', 'ICP', 'ILV', 'INJ'
-    "1000000MOG", "1000BONK", "1000CHEEMS", "1000FLOKI", "1000LUNC", "1000RATS", "1000SATS", "1INCH", "1MBABYDOGE", "4STOCK", "AAVE", "ACH", "ACU", "ADA", "AEON", "AEVO", "AGIX", "AGLD", "AIA", "AIN", "AIOT", "AIXBT", "AKE", "ALICE", "ALPINE", "AMB", "ANIME", "ANKR", "APEX", "API3", "APP", "APR", "APT", "AR", "ARIA", "ARK", "ARKM", "ARPA", "ARX", "ASTER", "ASTR", "ATH", "AVA", "AVAAI", "AVAX", "AWE", "AXL", "AXS", "AZTEC", "B", "B2", "BABY", "BAN", "BANANA", "BAND", "BARD", "BASED", "BAT", "BBX", "BEAMX", "BICO", "BIGTIME", "BIRB", "BITO", "BLUAI", "BLUR", "BLZ", "BMT", "BNB", "BNC", "BNLIFE", "BNT", "BNX", "BOME", "BOND", "BOT", "BR", "BRETT", "BREV", "BROCCOLI", "BSP", "BSV", "BTC", "BTR", "BTW", "BZ", "C", "C98", "CAKE", "CAP", "CARV", "CASHCAT", "CATERPILLAR", "CBRS", "CC", "CELO", "CELR", "CETUS", "CFG", "CFX", "CGPT", "CHILLGUY", "CHIP", "CHZ", "CLANKER", "CNPY", "COAI", "COLLECT", "COMBO", "COMP", "COOKIE", "COTI", "COW", "CRO", "CRV", "CRWV", "CSOPHLS2L", "CSOPSX2L", "CTK", "CTR", "CVC", "CVX", "CYBER", "CYS", "DAR", "DASH", "DATAIP", "DEEP", "DEXE", "DGAI", "DIA", "DOLO", "DOOD", "DOS", "DOT", "DRAM", "DRIFT", "DYDX", "DYM", "EDU", "EIGEN", "ELSA", "ENA", "ENJ", "EPIC", "ERA", "ESP", "ESPORTS", "ETC", "ETH", "ETHFI", "ETHW", "EUL", "EVAA", "FET", "FF", "FHE", "FIDA", "FIGHT", "FIL", "FLEX", "FLNC", "FLOCK", "FOLKS", "FRAX", "FRONT", "FTM", "FWDI", "G", "GAL", "GALA", "GAS", "GENIUS", "GIGADEV", "GIGGLE", "GLM", "GMT", "GMX", "GOAT", "GPS", "GRAM", "GRASS", "GRIFFAIN", "GRT", "GRVT", "GTC", "GUA", "GUN", "GWEI", "H", "HAEDAL", "HAJIMI", "HANA", "HBAR", "HEI", "HEMI", "HOLO", "HOME", "HOT", "HUMA", "HYPE", "HYPER", "ID", "IN", "INIT", "INJ", "INTW", "INX", "IO", "IOST", "IOTA", "IOTX", "IRYS", "JELLYJELLY", "JOE", "JST", "JTO", "KAIA", "KAITO", "KAS", "KAVA", "KERNEL", "KEY", "KITE", "KLAY", "KMNO", "KOMA", "KORU", "KSM", "KSTR", "LA", "LAB", "LDO", "LIGHT", "LIGHTER", "LINA", "LINEA", "LINK", "LISTA", "LIT", "LITE", "LOOM", "LPT", "LQTY", "LTC", "LUMIA", "LYTE", "M", "MAGIC", "MAGMA", "MANA", "MANTA", "MANTRA", "MARSCOIN", "MASK", "MATIC", "MAV", "ME", "MERL", "MET", "METIS", "MINA", "MINIMAX", "MIRA", "MITO", "MMT", "MNT", "MOCA", "MOODENG", "MOONSHOT", "MOVR", "MTL", "MUBARAK", "MUU", "MVLL", "MYX", "NAORIS", "NBIS", "NEAR", "NEO", "NEWT", "NIGHT", "NIULAI", "NMR", "NOM", "NOT", "NXPC", "OCEAN", "OG", "OKB", "ONDO", "ONT", "OP", "OPG", "OPN", "ORBS", "ORCA", "ORDI", "PAXG", "PHAROS", "PIEVERSE", "PIXEL", "PLUME", "PNUT", "POL", "POLYX", "PONS", "PORTAL", "POWER", "POWR", "PRL", "PROM", "PROMPT", "PUMP", "PUMPFUN", "PUNDIX", "PYTH", "Q", "QNT", "QNTX", "QTUM", "RAD", "RAM", "RE", "RECALL", "REN", "RENDER", "REZ", "RIF", "RNDR", "ROBO", "ROSE", "RPL", "RSR", "RUNE", "SAFE", "SAHARA", "SAND", "SAPIEN", "SCR", "SEI", "SENT", "SFP", "SHAZ", "SHELL", "SHLD", "SIGN", "SKDD", "SKL", "SKR", "SKUU", "SKY", "SLP", "SNX", "SNXX", "SOLV", "SOMI", "SONIC", "SOON", "SOPH", "SPACE", "SPCX", "SPK", "SPORTFUN", "SPX", "SQD", "SSV", "STABLE", "STBL", "STEEM", "STMX", "STO", "STRK", "STX", "STXX", "SUI", "SUN", "SUSHI", "SWARMS", "SXT", "SYRUP", "TAC", "TAIKO", "TAO", "TEST", "TEST1", "THE", "THETA", "TLM", "TMF", "TRADOOR", "TRB", "TREE", "TRIA", "TRUMP", "TRUST", "TRUTH", "TRX", "TST", "TURBO", "TURTLE", "TWT", "UB", "UMA", "UNFI", "UNI", "UP", "USAR", "USELESS", "VANA", "VELODROME", "VELVET", "VET", "VIRTUAL", "VVV", "WAL", "WAVES", "WCT", "WEN", "WET", "WIF", "WLD", "WLFI", "WOO", "XAI", "XAUT", "XEM", "XMR", "XNY", "XPIN", "XPL", "XRP", "XTZ", "XVG", "XVS", "YB", "YFI", "YGG", "ZAMA", "ZBCN", "ZBT", "ZEC", "ZEN", "ZEST", "ZETA", "ZHIPU", "ZHONGJI", "ZK", "ZKC", "ZRX"
+    "0G", "1000BONK", "1000CAT", "1000CHEEMS", "1000RATS", "1000SATS", "1INCH", "1MBABYDOGE", "4", "AAVE", "ACH", "ACT", "ACU", "ADA", "AERO", "AGLD", "AIA", "AIN", "AIO", "AIXBT", "AKE", "ALICE", "ALGO", "ALLO", "ALPINE", "ANIME", "ANKR", "APEX", "API3", "APR", "APT", "AR", "ARB", "ARIA", "ARKM", "ARPA", "ARX", "ASR", "ATH", "ATOM", "AUCTION", "AVNT", "AWE", "AXL", "AXS", "AZTEC", "B2", "BABY", "BAN", "BANANA", "BANANAS31", "BANK", "BAS", "BASED", "BAT", "BB", "BERA", "BICO", "BIGTIME", "BIO", "BIRB", "BLEND", "BLESS", "BLUAI", "BLUR", "BMT", "BNB", "BNT", "BOME", "BR", "BREV", "BROCCOLI", "BSV", "BTC", "BTR", "BTW", "C98", "CAKE", "CBRS", "CC", "CELO", "CELR", "CETUS", "CFG", "CFX", "CHILLGUY", "CHIP", "CHR", "CKB", "CLANKER", "COAI", "COLLECT", "COPPER", "COTI", "COW", "CRCL", "CROSS", "CRV", "CRWV", "CTK", "CTR", "CTSI", "CVC", "CVX", "CYBER", "CYS", "DEEP", "DEXE", "DIA", "DOGE", "DOGS", "DOLO", "DOOD", "DOT", "DRIFT", "DUSK", "DYDX", "DYM", "EDU", "EGLD", "EIGEN", "ELSA", "ENS", "ENSO", "EPIC", "ERA", "ESP", "ESPORTS", "ETC", "ETH", "ETHFI", "ETHW", "EWT", "FARTCOIN", "FET", "FF", "FIDA", "FIGHT", "FIL", "FLNC", "FLOW", "FLUID", "FOLKS", "FORM", "FRAX", "G", "GALA", "GAS", "GENIUS", "GIGGLE", "GMT", "GMX", "GOAT", "GPS", "GRASS", "GRIFFAIN", "GRT", "GTC", "GUA", "GUN", "GWEI", "H", "HAEDAL", "HANA", "HBAR", "HEI", "HEMI", "HOLO", "HOT", "HUMA", "HYPE", "HYPER", "ICNT", "ID", "IDOL", "ILV", "IMX", "INIT", "INJ", "INX", "IO", "IOTX", "IRYS", "JASMY", "JCT", "JOE", "JST", "JTO", "JUP", "KAIA", "KAITO", "KAS", "KAT", "KAVA", "KERNEL", "KGEN", "KITE", "KNC", "KOMA", "KSM", "LA", "LAB", "LDO", "LIGHT", "LINEA", "LINK", "LISTA", "LPT", "LSK", "LTC", "LUMIA", "LYN", "MAGIC", "MAGMA", "MANA", "MANTA", "MANTRA", "MASK", "MAV", "MAVIA", "ME", "MEGA", "MEME", "MERL", "METIS", "MEW", "MINA", "MIRA", "MITO", "MMT", "MNT", "MON", "MOODENG", "MORPHO", "MOVE", "MOVR", "MTL", "MUBARAK", "MYX", "NAORIS", "NBIS", "NEAR", "NEWT", "NIGHT", "NIL", "NOM", "NOT", "NOW", "NXPC", "OG", "OGN", "ONDO", "ONE", "ONG", "ONT", "OP", "OPEN", "OPG", "OPN", "ORCA", "ORDER", "PARTI", "PAXG", "PENGU", "PI", "PIEVERSE", "PIPPIN", "PIXEL", "POL", "POLYX", "POPCAT", "POWER", "POWR", "PRL", "PROMPT", "PROVE", "PTB", "PUNDIX", "PYTH", "QNT", "QTUM", "RARE", "RAY", "RE", "RECALL", "RED", "RENDER", "RESOLV", "REZ", "RIF", "RLC", "ROBO", "ROSE", "RPL", "RSR", "RUNE", "RVN", "SAFE", "SAGA", "SAHARA", "SAND", "SCR", "SEI", "SFP", "SHELL", "SIGN", "SIREN", "SKL", "SKR", "SKY", "SKYAI", "SLX", "SNX", "SOL", "SOMI", "SONIC", "SOON", "SOPH", "SPACE", "SPCX", "SPK", "SQD", "SSV", "STABLE", "STBL", "STEEM", "STG", "STO", "STRK", "STX", "SUN", "SUPER", "SUSHI", "SWARMS", "SXT", "SYN", "SYRUP", "TA", "TAC", "TAG", "TAIKO", "TAO", "THETA", "TIA", "TLM", "TNSR", "TOWNS", "TRB", "TREE", "TRIA", "TRUMP", "TRUST", "TRUTH", "TRX", "TST", "TURBO", "TURTLE", "TUT", "TWT", "UAI", "UB", "UMA", "UNI", "UP", "US", "USAR", "USTC", "USUAL", "VANA", "VELVET", "VIRTUAL", "VTHO", "VVV", "W", "WAL", "WAXP", "WCT", "WET", "WIF", "WLD", "WLFI", "WOO", "XAI", "XAN", "XAUT", "XLM", "XNY", "XPIN", "XPL", "XRP", "XTZ", "XVS", "YB", "YGG", "ZAMA", "ZBCN", "ZBT", "ZEN", "ZEREBRO", "ZEST", "ZETA", "ZIL", "ZK", "ZKC", "ZKP", "ZORA", "ZRO", "ZRX"
 ];
 
 
@@ -707,7 +706,7 @@ function PatternIcon({ type }) {
     );
 }
 
-// ─── Fetch 4H OHLC with retry ─────────────────────────────────────────────────
+// ─── Fetch 1H OHLC with retry ─────────────────────────────────────────────────
 // Antes leía velas de Binance; se migró a Bitunix (fetchKlines en
 // bitunixMarket.js) para que la detección de patrones y los niveles de
 // entrada/SL/TP1 se calculen sobre los mismos precios contra los que
@@ -716,7 +715,7 @@ function PatternIcon({ type }) {
 async function fetchPatterns(symbol, attempt = 0) {
     let raw;
     try {
-        raw = await fetchKlines(symbol, '4h', { limit: 200 });
+        raw = await fetchKlines(symbol, '1h', { limit: 200 });
     } catch (err) {
         if (err.message === 'RATE_LIMIT') {
             if (attempt < RETRY_DELAYS.length) {
@@ -1079,7 +1078,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
 function PatternChartModal({ coin, levels, onClose }) {
     const [candles,        setCandles]        = useState(null);
     const [error,          setError]          = useState(null);
-    const [chartInterval,  setChartInterval]  = useState('4h');
+    const [chartInterval,  setChartInterval]  = useState('1h');
     const sym        = coin.symbol.toUpperCase();
     const symbolPair = `${sym}USDT`;
 
@@ -1929,7 +1928,7 @@ export default function PatronesPage() {
                             // Log de backtesting: ápice 8-10 días + TP2 favorable (R:R >= 2),
                             // independiente de si el auto-trade real está activado o no.
                             if (isBacktestApexTarget(data) && levels && isFavorableTp2(levels)) {
-                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones', capital: getTradeAmount(), leverage: getAutoTradeLeverage() });
+                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones-1h', capital: getTradeAmount(), leverage: getAutoTradeLeverage() });
                             }
                         }
                     }
@@ -2061,9 +2060,9 @@ export default function PatronesPage() {
 
                 {/* ─── Header ───────────────────────────────────────────────── */}
                 <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión (4H)</h1>
+                    <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Patrones de Compresión (1H)</h1>
                     <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">
-                        Detección automática en gráfico 4H · Taza y Asa · Triángulos · Cuñas · Banderas · Banderines
+                        Detección automática en gráfico 1H · Taza y Asa · Triángulos · Cuñas · Banderas · Banderines
                     </p>
                     <div className="flex items-center gap-3 mt-3 flex-wrap">
                         {bitunixSymbols === null ? (
@@ -2197,7 +2196,7 @@ export default function PatronesPage() {
                                         <svg className="animate-spin w-4 h-4 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                                             <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                                         </svg>
-                                        <span className="text-sm font-semibold text-gray-700 dark:text-slate-200">Escaneando gráficos 4H…</span>
+                                        <span className="text-sm font-semibold text-gray-700 dark:text-slate-200">Escaneando gráficos 1H…</span>
                                         {currentCoin && (
                                             <span className="text-xs text-gray-400 dark:text-slate-500 font-mono">{currentCoin.symbol.toUpperCase()}</span>
                                         )}
@@ -2416,7 +2415,7 @@ export default function PatronesPage() {
                 {!initialLoad && scanRunning && allPatterns.length === 0 && (
                     <div className="text-center py-20 text-gray-400 dark:text-slate-500">
                         <div className="text-5xl mb-4">📐</div>
-                        <p className="font-semibold text-gray-500 dark:text-slate-400 text-lg">Buscando patrones en 4H…</p>
+                        <p className="font-semibold text-gray-500 dark:text-slate-400 text-lg">Buscando patrones en 1H…</p>
                         <p className="text-sm mt-2">Analizando {progress.done} de {progress.total} activos</p>
                     </div>
                 )}

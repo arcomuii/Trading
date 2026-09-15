@@ -541,7 +541,7 @@ function ClosePositionModal({ position, onClose, onClosed }) {
 const COLUMNS = [
     { key: "symbol",           label: "Símbolo"        },
     { key: "side",             label: "Lado"           },
-    { key: "qty",              label: "Cantidad"       },
+    // { key: "qty",              label: "Cantidad"       },
     { key: "avgPrice",         label: "Precio entrada" },
     { key: "markPrice",        label: "Precio actual"  },
     { key: "unrealizedPNL",    label: "P&L no real."   },
@@ -785,7 +785,14 @@ export default function BitunixPage() {
                 || (o.orderId    || "").includes(q);
         })
         .sort((a, b) => {
-            const strKeys = ["symbol", "side", "orderType", "status", "marginMode", "positionMode"];
+            const strKeys = [
+                "symbol", 
+                "side", 
+                "orderType", 
+                "status", 
+                "marginMode", 
+                "positionMode"
+            ];
             if (strKeys.includes(sortKey)) {
                 const va = (a[sortKey] || "").toLowerCase();
                 const vb = (b[sortKey] || "").toLowerCase();
@@ -1005,7 +1012,7 @@ export default function BitunixPage() {
                                                                 {o.symbol}
                                                             </td>
                                                             <td className="px-4 py-3 whitespace-nowrap"><SideBadge side={o.side} /></td>
-                                                            <td className="px-4 py-3 text-gray-600 dark:text-slate-300 tabular-nums whitespace-nowrap">{qty ? fmt(qty, 6) : "—"}</td>
+                                                            {/* <td className="px-4 py-3 text-gray-600 dark:text-slate-300 tabular-nums whitespace-nowrap">{qty ? fmt(qty, 6) : "—"}</td> */}
                                                             <td className="px-4 py-3 font-mono text-gray-700 dark:text-slate-300 whitespace-nowrap">
                                                                 {entryPrice ? `$${fmt(entryPrice)}` : "—"}
                                                             </td>

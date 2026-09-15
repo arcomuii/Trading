@@ -97,6 +97,16 @@ function sundayOf(dateStr) {
     return addDaysToDateStr(dateStr, -day)
 }
 
+// Fecha ('YYYY-MM-DD') del DÍA de trading (cierre 18:00 hrs CDMX, no
+// medianoche) al que pertenece el instante dateStr+hour: antes de las 18:00,
+// la fecha calendario "de hoy" todavía es el día de trading ANTERIOR (no ha
+// cerrado). Usada por tradingWeekSunday para el domingo, y por computeMetrics
+// para que "P&L Hoy"/"P&L Ayer" cierren a la misma hora que las semanas en
+// vez de a medianoche.
+function tradingDayStr(dateStr, hour) {
+    return hour < 18 ? addDaysToDateStr(dateStr, -1) : dateStr
+}
+
 // Domingo ('YYYY-MM-DD') que marca el ARRANQUE de la semana de trading que
 // contiene el instante (dateStr + hour, hour en CDMX vía cdmxHour). La semana
 // ahora corre de domingo a domingo, con corte a las 18:00 hrs CDMX (no a
@@ -106,7 +116,7 @@ function sundayOf(dateStr) {
 function tradingWeekSunday(dateStr, hour) {
     const [y, m, d] = dateStr.split('-').map(Number)
     const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay() // 0=Dom..6=Sáb
-    const effectiveStr = (day === 0 && hour < 18) ? addDaysToDateStr(dateStr, -1) : dateStr
+    const effectiveStr = day === 0 ? tradingDayStr(dateStr, hour) : dateStr
     return sundayOf(effectiveStr)
 }
 
@@ -202,29 +212,41 @@ function calcBacktestPnl(record) {
 // ── analytics ─────────────────────────────────────────────────
 function computeMetrics(history, equity) {
     if (!history.length || equity == null) return {}
-    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
-    const today  = cdmxDateStr()
-    const month  = today.slice(0, 7)
+    const sorted  = [...history].sort((a, b) => a.date.localeCompare(b.date))
+    const today   = cdmxDateStr()
+    const nowHour = cdmxHour()
+    const month   = today.slice(0, 7)
 
-    const yesterday = sorted.filter(e => e.date < today).at(-1)
+    // P&L Hoy/Ayer cierran a las 18:00 hrs CDMX, igual que la semana (ver
+    // tradingWeekSunday): antes de esa hora, el "hoy" calendario todavía es
+    // parte del día de trading ANTERIOR (no ha cerrado), así que "ayer" (el
+    // último día YA cerrado) no avanza hasta que den las 18:00.
+    const tradingToday = tradingDayStr(today, nowHour)
+    const yesterday = sorted.filter(e => e.date < tradingToday).at(-1)
+    // Entrada anterior a "yesterday" — igual criterio que dailyPnl (última
+    // registrada, no estrictamente el día calendario anterior si hubo un
+    // hueco, ej. fin de semana sin la pestaña abierta).
+    const dayBeforeYesterday = yesterday ? sorted.filter(e => e.date < yesterday.date).at(-1) : null
     const firstMon  = sorted.find(e => e.date.startsWith(month))
 
     const cutoff30 = addDaysToDateStr(today, -30)
     const base30   = sorted.find(e => e.date >= cutoff30) ?? sorted[0]
 
-    const sunday    = tradingWeekSunday(today, cdmxHour())
+    const sunday    = tradingWeekSunday(today, nowHour)
     const nextSat   = addDaysToDateStr(sunday, 6)
     const firstWeek = sorted.find(e => e.date >= sunday && e.date <= nextSat)
 
     return {
-        dailyPnl:   yesterday ? equity - yesterday.equity : null,
-        weeklyPnl:  firstWeek ? equity - firstWeek.equity : null,
-        monthlyPnl: firstMon  ? equity - firstMon.equity  : null,
-        pnl30:      base30    ? equity - base30.equity     : null,
-        baseDaily:  yesterday?.equity ?? null,
-        baseWeek:   firstWeek?.equity ?? null,
-        baseMonth:  firstMon?.equity  ?? null,
-        base30:     base30?.equity    ?? null,
+        dailyPnl:     yesterday ? equity - yesterday.equity : null,
+        yesterdayPnl: (yesterday && dayBeforeYesterday) ? yesterday.equity - dayBeforeYesterday.equity : null,
+        weeklyPnl:    firstWeek ? equity - firstWeek.equity : null,
+        monthlyPnl:   firstMon  ? equity - firstMon.equity  : null,
+        pnl30:        base30    ? equity - base30.equity     : null,
+        baseDaily:     yesterday?.equity ?? null,
+        baseYesterday: dayBeforeYesterday?.equity ?? null,
+        baseWeek:      firstWeek?.equity ?? null,
+        baseMonth:     firstMon?.equity  ?? null,
+        base30:        base30?.equity    ?? null,
     }
 }
 
@@ -235,27 +257,59 @@ function buildPnlSeries(history) {
 
 function buildMonthlyMap(history) {
     const map = {}
+    const order = []
     const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
     for (const entry of sorted) {
         const m = entry.date.slice(0, 7)
-        if (!map[m]) map[m] = { first: entry.equity, last: entry.equity }
+        if (!map[m]) { map[m] = { first: entry.equity, last: entry.equity }; order.push(m) }
         else map[m].last = entry.equity
+    }
+    // El "first" de cada mes no puede ser su propio primer snapshot: eso deja
+    // fuera la variación del día en que arrancó el mes (contra el cierre del
+    // mes anterior), que entonces no queda contabilizada en NINGÚN mes — y es
+    // justo lo que hacía que sumar las semanas de un mes no cuadrara con el
+    // total mensual (ver mismo fix en buildWeeklyMap). Se usa el cierre del
+    // mes anterior como apertura del actual; el mes más antiguo del historial
+    // no tiene mes previo, así que conserva su propio primer snapshot.
+    for (let i = 1; i < order.length; i++) {
+        map[order[i]].first = map[order[i - 1]].last
     }
     return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]))
 }
 
 // Igual que buildMonthlyMap, pero agrupando por semana de trading (domingo a
-// domingo, ver sundayOf) en vez de por mes calendario. Cada entrada del
-// historial ya es un día CERRADO, así que se agrupa por semana calendario
-// simple (sin el ajuste de las 18:00 de tradingWeekSunday, que solo aplica a
-// "hoy" para decidir si la semana actual ya arrancó).
+// domingo, ver sundayOf) en vez de por mes calendario.
+// OJO: no todas las entradas son un día ya CERRADO — la de HOY se escribe
+// apenas carga el dashboard (upsertSnapshot), sin importar la hora. Si hoy
+// es domingo antes de las 18:00 CDMX, esa entrada de "hoy" todavía es parte
+// de la semana ANTERIOR (mismo criterio que tradingWeekSunday para decidir
+// si la semana actual ya arrancó) — agruparla con sundayOf() puro abría la
+// tarjeta "13 Sep – 20 Sep" desde la mañana del domingo, en vez de hasta las
+// 18:00. Se reutiliza tradingWeekSunday para la entrada de hoy (con la hora
+// real) y un sentinel >=18 para el resto (cualquier día que no sea hoy ya
+// está cerrado sin importar qué hora fuera cuando se guardó).
 function buildWeeklyMap(history) {
     const map = {}
+    const order = []
     const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
+    const today = cdmxDateStr()
+    const nowHour = cdmxHour()
     for (const entry of sorted) {
-        const w = sundayOf(entry.date)
-        if (!map[w]) map[w] = { first: entry.equity, last: entry.equity }
+        const w = tradingWeekSunday(entry.date, entry.date === today ? nowHour : 24)
+        if (!map[w]) { map[w] = { first: entry.equity, last: entry.equity }; order.push(w) }
         else map[w].last = entry.equity
+    }
+    // Mismo problema que en buildMonthlyMap: si "first" es el propio primer
+    // snapshot de la semana, el movimiento del día en que arranca cada semana
+    // (domingo, vs. el cierre del sábado anterior) no lo cuenta NINGUNA
+    // semana — quedaba huérfano entre dos tarjetas. Confirmado con datos
+    // reales: esos dos huecos (transición 5→6 sep y 12→13 sep) sumaban
+    // +22.5 USDT que no aparecían en ninguna tarjeta semanal, por eso la
+    // suma de semanas no cuadraba con el resumen mensual. Se encadena el
+    // cierre de la semana anterior como apertura de la siguiente; `order` ya
+    // queda en orden cronológico ascendente porque `sorted` lo está.
+    for (let i = 1; i < order.length; i++) {
+        map[order[i]].first = map[order[i - 1]].last
     }
     return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]))
 }
@@ -469,7 +523,7 @@ function MetricCard({ label, value, sub, pct, color = 'text-gray-800 dark:text-s
 // app/lib/autoTrade.js — Bitunix no es consistente en el nombre del array
 // (positionList/list/array plano según el endpoint).
 async function fetchOpenPositionsCount() {
-    const res  = await fetch('/api/bitunix/api/v1/futures/position/get_pending_positions?pageNum=1&pageSize=100')
+    const res  = await fetch('/api/bitunix/api/v1/futures/position/get_pending_positions?pageNum=1&pageSize=100', { signal: AbortSignal.timeout(15_000) })
     const json = await res.json()
     const d = json?.data
     const list = Array.isArray(d?.positionList) ? d.positionList
@@ -487,6 +541,8 @@ export default function DashboardPage() {
     const [error,           setError]           = useState(null)
     const [history,         setHistory]         = useState([])
     const [lastFetch,       setLastFetch]        = useState(null)
+    const [equityRangeDays, setEquityRangeDays]  = useState(30)
+    const [pnlRangeDays,    setPnlRangeDays]     = useState(30)
 
     useEffect(() => {
         const run = async () => {
@@ -497,7 +553,11 @@ export default function DashboardPage() {
 
             try {
                 setError(null)
-                const res  = await fetch('/api/bitunix/api/v1/futures/account?marginCoin=USDT')
+                // Timeout explícito: un fetch colgado en un socket muerto
+                // (ver route.js del proxy) dejaba esta card en "Cargando..."
+                // para siempre tras un corte de internet, sin nunca caer al
+                // catch de abajo hasta refrescar la página a mano.
+                const res  = await fetch('/api/bitunix/api/v1/futures/account?marginCoin=USDT', { signal: AbortSignal.timeout(15_000) })
                 const json = await res.json()
                 if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
                 if (json.code !== undefined && json.code !== 0 && json.code !== '0')
@@ -545,7 +605,7 @@ export default function DashboardPage() {
         return () => clearInterval(iv)
     }, [])
 
-    const { dailyPnl, weeklyPnl, monthlyPnl, pnl30, baseDaily, baseWeek, baseMonth, base30 } =
+    const { dailyPnl, yesterdayPnl, weeklyPnl, monthlyPnl, pnl30, baseDaily, baseYesterday, baseWeek, baseMonth, base30 } =
         computeMetrics(history, equity)
 
     // P&L estimado del log de backtesting (app/backtesting) — igual cálculo
@@ -572,9 +632,11 @@ export default function DashboardPage() {
         .toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' })
     const weekLabel    = `${weekRangeFmt(sunday)} – ${weekRangeFmt(nextSundayStr)} · cierre 18:00`
 
-    const cutoff = addDaysToDateStr(todayStr, -30)
-    const hist30 = history.filter(e => e.date >= cutoff)
-    const pnlSer = buildPnlSeries(hist30)
+    const pnlCutoff  = addDaysToDateStr(todayStr, -pnlRangeDays)
+    const histPnlRange = history.filter(e => e.date >= pnlCutoff)
+    const pnlSer = buildPnlSeries(histPnlRange)
+    const equityCutoff   = addDaysToDateStr(todayStr, -equityRangeDays)
+    const histEquityRange = history.filter(e => e.date >= equityCutoff)
     const monthly = buildMonthlyMap(history).slice(0, 12)
     const weekly  = buildWeeklyMap(history).slice(0, 12)
     const fx = getForexSessionHours()
@@ -607,7 +669,7 @@ export default function DashboardPage() {
                 </div>
 
                 {/* Metric cards */}
-                <div className="grid grid-cols-2 2xl:grid-cols-6 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                     <MetricCard
                         label="Operaciones abiertas"
                         value={openPositions != null ? String(openPositions) : '—'}
@@ -623,8 +685,6 @@ export default function DashboardPage() {
                         color={pColor(btTotalClosedPnl)}
                         loading={loading}
                     />
-                </div>
-                <div className="grid grid-cols-5 2xl:grid-cols-6 gap-4">
                     <MetricCard
                         label="Equity actual"
                         value={equity != null ? `${fmt(equity)} USDT` : '—'}
@@ -635,7 +695,16 @@ export default function DashboardPage() {
                         label="P&L Hoy"
                         value={dailyPnl != null ? `${fmtS(dailyPnl)} USDT` : '—'}
                         pct={pct(dailyPnl, baseDaily)}
+                        sub="Cierre 18:00 hrs"
                         color={pColor(dailyPnl)}
+                        loading={loading}
+                    />
+                    <MetricCard
+                        label="P&L Ayer"
+                        value={yesterdayPnl != null ? `${fmtS(yesterdayPnl)} USDT` : '—'}
+                        pct={pct(yesterdayPnl, baseYesterday)}
+                        sub="Cierre 18:00 hrs"
+                        color={pColor(yesterdayPnl)}
                         loading={loading}
                     />
                     <MetricCard
@@ -650,7 +719,9 @@ export default function DashboardPage() {
                         label={`P&L ${month}`}
                         value={monthlyPnl != null ? `${fmtS(monthlyPnl)} USDT` : '—'}
                         pct={pct(monthlyPnl, baseMonth)}
-                        sub={`desde el 1 de ${monthN}`}
+                        sub={baseMonth != null
+                            ? <><br />Capital al 1 de {monthN}: <br /><b className={pColor(baseMonth)}>{fmt(baseMonth)} USDT</b></>
+                            : `desde el 1 de ${monthN}`}
                         color={pColor(monthlyPnl)}
                         loading={loading}
                     />
@@ -725,32 +796,68 @@ export default function DashboardPage() {
 
                 {/* Area chart — equity history */}
                 <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                         <div>
                             <p className="text-sm font-semibold text-gray-700 dark:text-slate-200">Historial de equity</p>
-                            <p className="text-xs text-gray-400 dark:text-slate-500">Últimos 30 días · USDT</p>
+                            <p className="text-xs text-gray-400 dark:text-slate-500">Últimos {equityRangeDays} días · USDT</p>
                         </div>
-                        <span className="text-xs font-mono text-gray-300 dark:text-slate-600">{hist30.length} registros</span>
+                        <div className="flex items-center gap-3">
+                            <div className="flex rounded-lg border border-gray-200 dark:border-slate-700 overflow-hidden">
+                                {[7, 30, 90].map(days => (
+                                    <button
+                                        key={days}
+                                        type="button"
+                                        onClick={() => setEquityRangeDays(days)}
+                                        className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                                            equityRangeDays === days
+                                                ? 'bg-gray-800 text-white dark:bg-slate-100 dark:text-slate-900'
+                                                : 'bg-white text-gray-500 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                                        }`}
+                                    >
+                                        {days}d
+                                    </button>
+                                ))}
+                            </div>
+                            <span className="text-xs font-mono text-gray-300 dark:text-slate-600">{histEquityRange.length} registros</span>
+                        </div>
                     </div>
-                    <AreaChart data={hist30} />
+                    <AreaChart data={histEquityRange} />
                 </div>
 
                 {/* Bar chart — daily P&L */}
                 <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                         <div>
                             <p className="text-sm font-semibold text-gray-700 dark:text-slate-200">Ganancias / Pérdidas diarias</p>
-                            <p className="text-xs text-gray-400 dark:text-slate-500">Últimos 30 días · USDT</p>
+                            <p className="text-xs text-gray-400 dark:text-slate-500">Últimos {pnlRangeDays} días · USDT</p>
                         </div>
-                        <div className="flex gap-3 text-xs text-gray-400 dark:text-slate-500">
-                            <span className="flex items-center gap-1.5">
-                                <span className="w-2.5 h-2.5 rounded-sm bg-green-500 inline-block" />
-                                Ganancia
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                                <span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" />
-                                Pérdida
-                            </span>
+                        <div className="flex items-center gap-3">
+                            <div className="flex gap-3 text-xs text-gray-400 dark:text-slate-500">
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm bg-green-500 inline-block" />
+                                    Ganancia
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" />
+                                    Pérdida
+                                </span>
+                            </div>
+                            <div className="flex rounded-lg border border-gray-200 dark:border-slate-700 overflow-hidden">
+                                {[7, 30, 90].map(days => (
+                                    <button
+                                        key={days}
+                                        type="button"
+                                        onClick={() => setPnlRangeDays(days)}
+                                        className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                                            pnlRangeDays === days
+                                                ? 'bg-gray-800 text-white dark:bg-slate-100 dark:text-slate-900'
+                                                : 'bg-white text-gray-500 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                                        }`}
+                                    >
+                                        {days}d
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </div>
                     <BarChart data={pnlSer} />

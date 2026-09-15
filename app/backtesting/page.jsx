@@ -70,6 +70,30 @@ function fmt(n) {
     return n < 1 ? n.toFixed(6) : n.toFixed(2)
 }
 
+// `capital` y `leverage` se leen juntos de la config local en el momento del
+// hallazgo (getTradeAmount()/getAutoTradeLeverage(), ver autoTrade.js:348-349)
+// — así que si cambia uno, casi siempre cambia el otro. Se aprovecha para los
+// registros de antes de que se empezara a guardar `leverage` (pero que sí ya
+// traen `capital`): en vez de caer directo al fallback genérico
+// (PNL_LEVERAGE_FALLBACK), se usa el leverage más frecuente entre los
+// registros con ESE MISMO capital que sí lo tienen guardado — mucho más
+// preciso que asumir el default del código, que puede estar lejísimos del
+// real (ej.: en este log, capital=3 siempre corrió a leverage=20, nunca a 2).
+function buildLeverageByCapital(records) {
+    const counts = {}
+    for (const r of records) {
+        if (r.capital == null || r.leverage == null) continue
+        const byLeverage = counts[r.capital] ?? (counts[r.capital] = {})
+        byLeverage[r.leverage] = (byLeverage[r.leverage] ?? 0) + 1
+    }
+    const result = {}
+    for (const capital in counts) {
+        const [bestLeverage] = Object.entries(counts[capital]).sort((a, b) => b[1] - a[1])[0]
+        result[capital] = Number(bestLeverage)
+    }
+    return result
+}
+
 // Ganancia/pérdida estimada en USDT. Los registros creados desde el cambio que
 // agregó `capital` (monto configurado al momento del hallazgo) usan ese valor
 // real; los anteriores no lo tienen y caen al monto fijo de referencia
@@ -78,9 +102,10 @@ function fmt(n) {
 // El USDT real de una posición apalancada es el movimiento de precio aplicado
 // al NOTIONAL (capital * leverage), no solo al capital/margen — igual que
 // roiTp1 en OpenPositionModal (pnlUsdt/margin*100 == priceMovePct*leverage).
-// Los registros previos a que se guardara `leverage` por operación caen al
-// fallback (no se puede reconstruir retroactivamente cuál se usó realmente).
-function calcPnl(record) {
+// `leverageByCapital` (ver buildLeverageByCapital) resuelve el leverage real
+// para los registros que no lo tienen guardado pero sí tienen `capital`; solo
+// cae al fallback genérico si tampoco hay ninguna pista de ese capital.
+function calcPnl(record, leverageByCapital) {
     const entry = record.precioEntrada
     if (entry == null) return null
 
@@ -91,7 +116,9 @@ function calcPnl(record) {
 
     const isLong = record.tipoPosicion === 'long'
     const capital = record.capital ?? PNL_NOTIONAL_USDT
-    const leverage = record.leverage ?? PNL_LEVERAGE_FALLBACK
+    const leverage = record.leverage
+        ?? leverageByCapital?.[record.capital]
+        ?? PNL_LEVERAGE_FALLBACK
     const pct = isLong ? (exitPrice - entry) / entry : (entry - exitPrice) / entry
     return { pct: pct * leverage * 100, usdt: pct * capital * leverage }
 }
@@ -231,7 +258,7 @@ function LevelsEditor({ record, onSaved, onCancel }) {
     )
 }
 
-function BacktestCard({ record, onUpdated }) {
+function BacktestCard({ record, onUpdated, leverageByCapital }) {
     const [candles, setCandles] = useState(null)
     const [error, setError] = useState(null)
     const [showChartModal, setShowChartModal] = useState(false)
@@ -240,7 +267,7 @@ function BacktestCard({ record, onUpdated }) {
     const meta = STATUS_META[record.estatus] ?? STATUS_META.en_proceso
     const isLong = record.tipoPosicion === 'long'
     const isClosed = record.estatus === 'ganadora' || record.estatus === 'perdedora'
-    const pnl = calcPnl(record)
+    const pnl = calcPnl(record, leverageByCapital)
 
     useEffect(() => {
         let cancelled = false
@@ -402,14 +429,17 @@ export default function BacktestingPage() {
     const resueltas  = ganadoras + perdedoras
     const winRate    = resueltas > 0 ? (ganadoras / resueltas) * 100 : null
 
-    // P&L estimado asumiendo el monto/apalancamiento default del auto-trade real.
+    // P&L estimado asumiendo el monto/apalancamiento real de cada operación
+    // (o el leverage inferido de otras operaciones con el mismo capital, ver
+    // buildLeverageByCapital, para los registros que no lo tienen guardado).
+    const leverageByCapital = buildLeverageByCapital(records)
     const closedPnl = records
         .filter(r => r.estatus === 'ganadora' || r.estatus === 'perdedora')
-        .map(calcPnl)
+        .map(r => calcPnl(r, leverageByCapital))
         .filter(Boolean)
     const totalClosedPnlUsdt = closedPnl.reduce((sum, p) => sum + p.usdt, 0)
 
-    const openPnl = records.filter(r => r.estatus === 'en_proceso').map(calcPnl).filter(Boolean)
+    const openPnl = records.filter(r => r.estatus === 'en_proceso').map(r => calcPnl(r, leverageByCapital)).filter(Boolean)
     const totalOpenPnlUsdt = openPnl.reduce((sum, p) => sum + p.usdt, 0)
 
     const sorted = [...records].sort((a, b) => new Date(b.horaApertura) - new Date(a.horaApertura))
@@ -466,7 +496,7 @@ export default function BacktestingPage() {
                                 </span>
                             </div>
                             <div className="grid grid-cols-2 gap-5">
-                                {items.map(record => <BacktestCard key={record.id} record={record} onUpdated={load} />)}
+                                {items.map(record => <BacktestCard key={record.id} record={record} onUpdated={load} leverageByCapital={leverageByCapital} />)}
                             </div>
                         </div>
                     )
