@@ -46,38 +46,6 @@ const links = [
     ),
   },
   {
-    href: '/analisis-de-mercado',
-    label: 'Análisis de Mercado',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M9.5 8h3a2 2 0 1 1 0 4h-3v4" />
-        <path d="M9.5 12h4a2 2 0 1 1 0 4h-4" />
-        <line x1="9.5" y1="8" x2="9.5" y2="16" />
-      </svg>
-    ),
-  },
-  {
-    href: '/prospectos',
-    label: 'Prospectos',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="11" cy="11" r="8" />
-        <line x1="21" y1="21" x2="16.65" y2="16.65" />
-      </svg>
-    ),
-  },
-  {
-    href: '/prospectos-bitso',
-    label: 'Bitso Swing',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
-        <polyline points="16 7 22 7 22 13" />
-      </svg>
-    ),
-  },
-  {
     href: '/patrones',
     label: 'Patrones',
     icon: (
@@ -115,6 +83,25 @@ const links = [
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 4 3 10 9 10" />
+      </svg>
+    ),
+  },
+  {
+    href: '/backtesting-forex',
+    label: 'Backtest Forex',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 4 3 10 9 10" />
+        <path d="M12 8v4l3 2" />
+      </svg>
+    ),
+  },
+  {
+    href: '/forex',
+    label: 'Forex',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 12h4l3 8 4-16 3 8h4" />
       </svg>
     ),
   },
