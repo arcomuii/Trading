@@ -43,7 +43,19 @@ async function loadHistory() {
 }
 
 function upsertSnapshot(equity, base) {
-    const d    = cdmxDateStr()
+    // Se guarda bajo el DÍA DE TRADING (cierre 18:00 hrs CDMX vía
+    // tradingDayStr), no el día calendario. Antes se guardaba con
+    // cdmxDateStr() puro, así que el valor que quedaba grabado para, p.ej.,
+    // "17 sep" era el último snapshot tomado antes de MEDIANOCHE (23:59) —
+    // hasta 6 horas antes del cierre real de las 18:00 del 18 de septiembre.
+    // Eso hacía que "P&L Hoy" incluyera de más (o de menos) el tramo 18:00
+    // sep17→23:59 sep17, que en realidad pertenece al día de trading
+    // ANTERIOR. Al usar tradingDayStr aquí, el registro de un día sigue
+    // recibiendo actualizaciones hasta las 18:00 del día calendario
+    // siguiente, y el valor que queda congelado en ese momento es
+    // exactamente la equity al cierre de las 18:00 — la ventana que pide el
+    // dashboard (ayer 18:01 a hoy 18:00) queda exacta, sin el desfase.
+    const d    = tradingDayStr(cdmxDateStr(), cdmxHour())
     const hist = [...base]
     const idx  = hist.findIndex(e => e.date === d)
     if (idx >= 0) hist[idx].equity = equity
@@ -215,18 +227,27 @@ function computeMetrics(history, equity) {
     const sorted  = [...history].sort((a, b) => a.date.localeCompare(b.date))
     const today   = cdmxDateStr()
     const nowHour = cdmxHour()
-    const month   = today.slice(0, 7)
+    // Mismo corte de las 18:00 hrs CDMX que dailyPnl/weeklyPnl: antes de esa
+    // hora, "hoy" calendario todavía es parte del día de trading (y por lo
+    // tanto del MES de trading) anterior — si hoy es día 1 antes de las
+    // 18:00, el mes de trading actual sigue siendo el anterior.
+    const month   = tradingDayStr(today, nowHour).slice(0, 7)
 
-    // P&L Hoy/Ayer cierran a las 18:00 hrs CDMX, igual que la semana (ver
-    // tradingWeekSunday): antes de esa hora, el "hoy" calendario todavía es
-    // parte del día de trading ANTERIOR (no ha cerrado), así que "ayer" (el
-    // último día YA cerrado) no avanza hasta que den las 18:00.
+    // "P&L Hoy" es la ventana YA CERRADA [ayer 18:01, hoy 18:00] — pedido
+    // explícito del usuario — NO "equity en vivo ahora mismo menos el último
+    // cierre" (eso sería el P&L de la sesión que TODAVÍA está abierta, de
+    // hoy 18:00 en adelante, una ventana distinta que ni siquiera empieza
+    // donde el usuario pidió que terminara). Como `entry.date` ya es el día
+    // de trading (ver upsertSnapshot), `lastClose` (el último día YA
+    // cerrado, estrictamente anterior al día de trading en curso) queda
+    // congelado exactamente en la equity de HOY 18:00, y `prevClose` (el que
+    // cerró justo antes) en la de AYER 18:00 — la resta es la ventana
+    // pedida, sin usar la equity en vivo para nada. "P&L Ayer" se recorre un
+    // cierre más atrás con el mismo criterio.
     const tradingToday = tradingDayStr(today, nowHour)
-    const yesterday = sorted.filter(e => e.date < tradingToday).at(-1)
-    // Entrada anterior a "yesterday" — igual criterio que dailyPnl (última
-    // registrada, no estrictamente el día calendario anterior si hubo un
-    // hueco, ej. fin de semana sin la pestaña abierta).
-    const dayBeforeYesterday = yesterday ? sorted.filter(e => e.date < yesterday.date).at(-1) : null
+    const lastClose     = sorted.filter(e => e.date < tradingToday).at(-1)
+    const prevClose     = lastClose ? sorted.filter(e => e.date < lastClose.date).at(-1) : null
+    const prevPrevClose = prevClose ? sorted.filter(e => e.date < prevClose.date).at(-1) : null
     const firstMon  = sorted.find(e => e.date.startsWith(month))
 
     const cutoff30 = addDaysToDateStr(today, -30)
@@ -237,13 +258,13 @@ function computeMetrics(history, equity) {
     const firstWeek = sorted.find(e => e.date >= sunday && e.date <= nextSat)
 
     return {
-        dailyPnl:     yesterday ? equity - yesterday.equity : null,
-        yesterdayPnl: (yesterday && dayBeforeYesterday) ? yesterday.equity - dayBeforeYesterday.equity : null,
+        dailyPnl:     (lastClose && prevClose)     ? lastClose.equity - prevClose.equity     : null,
+        yesterdayPnl: (prevClose && prevPrevClose) ? prevClose.equity - prevPrevClose.equity : null,
         weeklyPnl:    firstWeek ? equity - firstWeek.equity : null,
         monthlyPnl:   firstMon  ? equity - firstMon.equity  : null,
         pnl30:        base30    ? equity - base30.equity     : null,
-        baseDaily:     yesterday?.equity ?? null,
-        baseYesterday: dayBeforeYesterday?.equity ?? null,
+        baseDaily:     prevClose?.equity     ?? null,
+        baseYesterday: prevPrevClose?.equity ?? null,
         baseWeek:      firstWeek?.equity ?? null,
         baseMonth:     firstMon?.equity  ?? null,
         base30:        base30?.equity    ?? null,
@@ -259,6 +280,10 @@ function buildMonthlyMap(history) {
     const map = {}
     const order = []
     const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
+    // `entry.date` ya ES el día de trading (cierre 18:00 hrs CDMX, ver
+    // upsertSnapshot) — no el día calendario — así que agrupar por sus
+    // primeros 7 caracteres ya da el mes de trading correcto sin ningún
+    // ajuste adicional aquí, incluida la entrada de hoy todavía abierta.
     for (const entry of sorted) {
         const m = entry.date.slice(0, 7)
         if (!map[m]) { map[m] = { first: entry.equity, last: entry.equity }; order.push(m) }
@@ -278,24 +303,16 @@ function buildMonthlyMap(history) {
 }
 
 // Igual que buildMonthlyMap, pero agrupando por semana de trading (domingo a
-// domingo, ver sundayOf) en vez de por mes calendario.
-// OJO: no todas las entradas son un día ya CERRADO — la de HOY se escribe
-// apenas carga el dashboard (upsertSnapshot), sin importar la hora. Si hoy
-// es domingo antes de las 18:00 CDMX, esa entrada de "hoy" todavía es parte
-// de la semana ANTERIOR (mismo criterio que tradingWeekSunday para decidir
-// si la semana actual ya arrancó) — agruparla con sundayOf() puro abría la
-// tarjeta "13 Sep – 20 Sep" desde la mañana del domingo, en vez de hasta las
-// 18:00. Se reutiliza tradingWeekSunday para la entrada de hoy (con la hora
-// real) y un sentinel >=18 para el resto (cualquier día que no sea hoy ya
-// está cerrado sin importar qué hora fuera cuando se guardó).
+// domingo) en vez de por mes. `entry.date` ya ES el día de trading (cierre
+// 18:00 hrs CDMX, ver upsertSnapshot), así que basta sundayOf() puro — sin
+// ajuste de hora — porque el corte de las 18:00 ya quedó resuelto al grabar
+// cada snapshot con esa fecha, incluida la entrada de hoy todavía abierta.
 function buildWeeklyMap(history) {
     const map = {}
     const order = []
     const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
-    const today = cdmxDateStr()
-    const nowHour = cdmxHour()
     for (const entry of sorted) {
-        const w = tradingWeekSunday(entry.date, entry.date === today ? nowHour : 24)
+        const w = sundayOf(entry.date)
         if (!map[w]) { map[w] = { first: entry.equity, last: entry.equity }; order.push(w) }
         else map[w].last = entry.equity
     }
@@ -622,9 +639,14 @@ export default function DashboardPage() {
         base && base > 0 && pnl != null ? `(${fmtS((pnl / base) * 100, 2)}%)` : null
 
     const todayStr = cdmxDateStr()
-    const todayUTC = new Date(`${todayStr}T00:00:00Z`)
-    const month  = todayUTC.toLocaleDateString('es-MX', { month: 'long', year: 'numeric', timeZone: 'UTC' })
-    const monthN = todayUTC.toLocaleDateString('es-MX', { month: 'long', timeZone: 'UTC' })
+    // El nombre de mes mostrado usa el mismo corte de las 18:00 hrs CDMX que
+    // computeMetrics/buildMonthlyMap — si no, el label podía decir "octubre"
+    // mientras la cifra de la card seguía siendo la de septiembre (antes de
+    // que cerrara el día 1).
+    const tradingTodayStr = tradingDayStr(todayStr, cdmxHour())
+    const monthUTC = new Date(`${tradingTodayStr}T00:00:00Z`)
+    const month  = monthUTC.toLocaleDateString('es-MX', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    const monthN = monthUTC.toLocaleDateString('es-MX', { month: 'long', timeZone: 'UTC' })
 
     const sunday       = tradingWeekSunday(todayStr, cdmxHour())
     const nextSundayStr = addDaysToDateStr(sunday, 7)
@@ -720,8 +742,8 @@ export default function DashboardPage() {
                         value={monthlyPnl != null ? `${fmtS(monthlyPnl)} USDT` : '—'}
                         pct={pct(monthlyPnl, baseMonth)}
                         sub={baseMonth != null
-                            ? <><br />Capital al 1 de {monthN}: <br /><b className={pColor(baseMonth)}>{fmt(baseMonth)} USDT</b></>
-                            : `desde el 1 de ${monthN}`}
+                            ? <>Cierre 18:00 hrs<br />Capital al 1 de {monthN}: <br /><b className={pColor(baseMonth)}>{fmt(baseMonth)} USDT</b></>
+                            : `desde el 1 de ${monthN} · cierre 18:00 hrs`}
                         color={pColor(monthlyPnl)}
                         loading={loading}
                     />
@@ -867,7 +889,7 @@ export default function DashboardPage() {
                 {monthly.length > 0 && (
                     <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
                         <p className="text-sm font-semibold text-gray-700 dark:text-slate-200 mb-1">Resumen mensual</p>
-                        <p className="text-xs text-gray-400 dark:text-slate-500 mb-4">Del día 1 al último día de cada mes</p>
+                        <p className="text-xs text-gray-400 dark:text-slate-500 mb-4">Del día 1 al último día de cada mes · cierre 18:00 hrs</p>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                             {monthly.map(([key, { first, last }]) => {
                                 const pnl  = last - first
@@ -944,6 +966,8 @@ export default function DashboardPage() {
                                     {[...history].reverse().map((row, i, arr) => {
                                         const prev = arr[i + 1]  // arr is reversed, so prev = older entry
                                         const pnlD = prev != null ? row.equity - prev.equity : null
+                                        // row.date ya es el día de trading (cierre 18:00 hrs CDMX, ver
+                                        // upsertSnapshot) — no hace falta ningún ajuste de hora aquí.
                                         const mon  = row.date.slice(0, 7)
                                         const firstInMon = history
                                             .filter(e => e.date.startsWith(mon) && e.date <= row.date)
