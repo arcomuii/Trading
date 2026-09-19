@@ -1,8 +1,8 @@
 import { createHash } from 'crypto'
 import { NextResponse } from 'next/server'
 
-const BITUNIX_API_KEY      = process.env.BITUNIX_API_KEY || 'e6aea4343b38c0568e524558020afbe2'
-const BITUNIX_SECRET       = process.env.BITUNIX_SECRET  || 'fb29ee282e536d6dc05a7c3fa7479146'
+const BITUNIX_API_KEY      = process.env.BITUNIX_API_KEY
+const BITUNIX_SECRET       = process.env.BITUNIX_SECRET
 const BITUNIX_FUTURES_BASE = 'https://fapi.bitunix.com'
 const BITUNIX_SPOT_BASE    = 'https://openapi.bitunix.com'
 
