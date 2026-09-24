@@ -451,9 +451,10 @@ export function findConfluenceTrades(m5Candles, htfCandles, htfCandleMs = 4 * 3_
 // (HTF + barrido + momentum + OB + TP≥MIN_RR — idéntica lógica, mismos
 // parámetros por par), pero SIN el paso final de "buscar el relleno en el
 // historial": ese paso tiene sentido en el backtest (ya sabemos qué pasó
-// después), pero en vivo la orden límite se manda al bróker EN EL MOMENTO
-// en que el CHoCH confirma, y es Capital.com quien la rellena de verdad si
-// el precio regresa — no hay nada que "buscar". Devuelve TODOS los setups
+// después), pero en vivo la orden se manda a MERCADO al bróker EN EL MOMENTO
+// en que el CHoCH confirma — Capital.com la llena de inmediato al precio
+// vigente, no hay nada que "buscar" ni ningún nivel que esperar a que el
+// precio regrese. Devuelve TODOS los setups
 // que califican en la ventana de velas dada, cada uno con el índice/hora
 // exactos del CHoCH que lo confirmó (`chochTime`) para que el bot pueda
 // distinguir uno YA ATENDIDO de uno nuevo (comparando contra el último

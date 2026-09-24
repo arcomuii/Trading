@@ -35,23 +35,30 @@
 //     mismo si el capital crece o el usuario decide arriesgar más a la vez.
 //     Se lee del estado compartido EN CADA CICLO (no es una constante fija
 //     aquí), así que un cambio desde la página aplica sin reiniciar el bot.
-//   - Siempre el tamaño mínimo permitido (100 unidades) — no hay margen para
-//     escalar el tamaño con este capital.
+//   - Volumen por operación configurable POR PAR desde /forex (pedido
+//     explícito), por defecto el mínimo permitido por Capital.com (100
+//     unidades) — con $10 no hay margen para escalar el tamaño por defecto,
+//     pero queda ajustable ahí mismo si el capital crece. Igual que
+//     maxConcurrentPositions, se lee del estado en cada ciclo.
 //   - Circuit breaker: si el balance real cae por debajo del 50% del primer
 //     balance que el bot observó, se detiene la apertura de NUEVAS
 //     operativas (las que ya están abiertas siguen su curso normal hasta
 //     cerrar) — para no seguir arriesgando una cuenta que ya perdió la
 //     mitad. Se reactiva solo, si el balance se recupera arriba del 50%.
 import { findLiveSetups, PAIR_PRESETS } from '../app/lib/forexConfluenceEngine.js'
-import { readState, updateState, pushLog, PAIRS, DEFAULT_MAX_CONCURRENT_POSITIONS } from '../app/lib/forexBotState.js'
+import { readState, updateState, pushLog, PAIRS, DEFAULT_MAX_CONCURRENT_POSITIONS, DEFAULT_ORDER_SIZE } from '../app/lib/forexBotState.js'
 
 const BASE_URL = `http://localhost:${process.env.TRADING_DEV_PORT || '3001'}`
 const FETCH_TIMEOUT_MS = 40_000 // mismo margen que route.js contra la API real de Capital.com
 const CYCLE_MS = 5 * 60_000 // alineado a M5 — no tiene sentido revisar más seguido, las velas nuevas tardan 5 min en cerrar
 const HTF_INTERVAL_MS = 4 * 3_600_000 // H4
 
-const ORDER_SIZE = 100             // minDealSize real de Capital.com, verificado igual para los 6 pares
-const STALE_ORDER_HOURS = 10       // mismo criterio que CHOCH_TO_FILL_CANDLES del backtest — cancela la orden límite si no se llenó en este tiempo
+// El volumen por operación (antes ORDER_SIZE, fijo en 100 para los 6 pares)
+// ahora es configurable POR PAR desde /forex — pedido explícito del usuario —
+// ver `pairs[symbol].orderSize` en forexBotState.js. Se lee del estado en
+// cada ciclo (más abajo, dentro del loop de PAIRS), no queda una constante
+// fija acá.
+const STALE_ORDER_HOURS = 10       // red de seguridad para una orden que quedó pendiente sin resolverse (ya no debería pasar con órdenes a mercado, que se resuelven en el mismo ciclo) — mismo criterio que CHOCH_TO_FILL_CANDLES del backtest
 const CIRCUIT_BREAKER_RATIO = 0.5  // detiene aperturas nuevas si el balance cae debajo de esta fracción del balance inicial observado
 
 // Cada par necesita M5 hacia atrás por lo menos `liquidityLookbackDays` (el
@@ -174,14 +181,22 @@ async function getConfirmation(dealReference) {
 // debe decidirla quien corre el script, no quien lo escribe).
 const DRY_RUN = process.env.FOREX_BOT_DRY_RUN === '1'
 
-async function placeLimitOrder({ epic, direction, size, level, stopLevel, profitLevel }) {
+// Abre la posición YA, al precio de mercado actual — a diferencia de una
+// orden LIMIT (api/v1/workingorders con `level`/`type`), acá no se manda
+// `level` ni `type`: Capital.com la ejecuta de inmediato contra el precio
+// vigente (con el slippage normal de una orden a mercado) en vez de esperar
+// a que el precio TOQUE un nivel específico. `level` sigue calculándose en
+// runCycle() como referencia para el log/estado, pero el precio real de
+// llenado es el que devuelve /confirms (ver `confirmation?.level` en el
+// call site).
+async function placeMarketOrder({ epic, direction, size, stopLevel, profitLevel }) {
     if (DRY_RUN) {
-        log('warn', `[DRY RUN] NO se mandó ninguna orden real — hubiera sido: ${direction} ${size} ${epic} @ ${level} (SL ${stopLevel}, TP ${profitLevel})`)
+        log('warn', `[DRY RUN] NO se mandó ninguna orden real — hubiera sido: ${direction} ${size} ${epic} a mercado (SL ${stopLevel}, TP ${profitLevel})`)
         return { dealReference: `dryrun-${Date.now()}` }
     }
-    return apiFetch('api/v1/workingorders', {
+    return apiFetch('api/v1/positions', {
         method: 'POST',
-        body: { epic, direction, size, level, type: 'LIMIT', stopLevel, profitLevel },
+        body: { epic, direction, size, stopLevel, profitLevel },
     })
 }
 
@@ -210,6 +225,22 @@ function marginUsdFor(baseCcy, size, entryPrice, marginFactor, gbpUsdRate) {
     return size * entryPrice * marginFactor
 }
 
+// Precio medio de mercado a partir del objeto `market` que acompaña cada
+// entrada de /positions ({ position, market }) — a diferencia de midPrice()
+// (arriba, pensada para velas históricas con bid/ask), el snapshot en vivo de
+// Capital.com nombra el lado vendedor `offer` en vez de `ask`; se prueban
+// ambos nombres a propósito (sin confirmación 100% contra la API real, ver
+// nota de dealIdOf() más arriba) para que, si el nombre real fuera distinto,
+// esto devuelva null en vez de un precio inventado — el precio de salida
+// simplemente se muestra como "no disponible" en vez de mostrar un dato falso.
+function positionMidPrice(market) {
+    if (!market) return null
+    const bid = parseFloat(market.bid)
+    const ask = parseFloat(market.offer ?? market.ask)
+    if (Number.isFinite(bid) && Number.isFinite(ask)) return (bid + ask) / 2
+    return Number.isFinite(bid) ? bid : Number.isFinite(ask) ? ask : null
+}
+
 function roundToTick(price, tickSize) {
     if (!tickSize) return price
     return Math.round(price / tickSize) * tickSize
@@ -222,7 +253,12 @@ function roundToTick(price, tickSize) {
 // rechazó (ya no está en ninguna de las dos listas); posición abierta que se
 // CERRÓ (ya no está en /positions).
 async function reconcile(state, realPositions, realWorkingOrders) {
-    const positionByDealId = new Map(realPositions.map(p => [p.position.dealId, p.position]))
+    // Se guarda la entrada completa ({ position, market }), no solo
+    // `.position`, para poder leer también el precio de mercado en vivo
+    // (`market`) al refrescar `lastKnownPrice` más abajo — antes solo se
+    // quedaba con `.position` y se perdía el precio, dejando "precio de
+    // salida" imposible de aproximar al cerrarse la posición.
+    const positionByDealId = new Map(realPositions.map(p => [p.position.dealId, p]))
     for (const w of realWorkingOrders) {
         if (dealIdOf(w) == null) log('warn', `workingOrder con forma desconocida, ajustar dealIdOf(): ${JSON.stringify(w)}`)
     }
@@ -232,24 +268,28 @@ async function reconcile(state, realPositions, realWorkingOrders) {
     for (let i = state.pendingOrders.length - 1; i >= 0; i--) {
         const po = state.pendingOrders[i]
         if (positionByDealId.has(po.dealId) || positionByDealId.has(po.workingOrderId)) {
-            const pos = positionByDealId.get(po.dealId) ?? positionByDealId.get(po.workingOrderId)
+            const pos = (positionByDealId.get(po.dealId) ?? positionByDealId.get(po.workingOrderId)).position
             state.pendingOrders.splice(i, 1)
             state.openPositions.push({ ...po, dealId: pos.dealId, lastKnownUpl: pos.upl ?? 0, openedAt: new Date().toISOString() })
-            pushLog(state, 'info', `${po.symbol}: orden límite LLENADA — posición real abierta (dealId ${pos.dealId})`)
+            pushLog(state, 'info', `${po.symbol}: orden LLENADA — posición real abierta (dealId ${pos.dealId})`)
             continue
         }
         if (!workingByDealId.has(po.dealId)) {
-            // Ya no está pendiente ni es posición — se canceló, se rechazó, o venció.
+            // Ya no está pendiente ni es posición — se canceló, se rechazó, o venció
+            // (con órdenes a mercado esto normalmente significa que el confirms del
+            // ciclo anterior no llegó claro y, al revisar de nuevo, resultó rechazada).
             state.pendingOrders.splice(i, 1)
-            pushLog(state, 'warn', `${po.symbol}: la orden límite ya no existe (cancelada/rechazada/vencida) — se descarta del seguimiento`)
+            pushLog(state, 'warn', `${po.symbol}: la orden ya no existe (cancelada/rechazada/vencida) — se descarta del seguimiento`)
             continue
         }
-        // Sigue pendiente — ¿ya se puso vieja?
+        // Sigue pendiente (esto ya solo debería pasar con una orden límite vieja
+        // de antes de este cambio — una orden a mercado se resuelve en el mismo
+        // ciclo) — ¿ya se puso vieja?
         const ageHours = (Date.now() - new Date(po.placedAt).getTime()) / 3_600_000
         if (ageHours > STALE_ORDER_HOURS) {
             try {
                 await cancelWorkingOrder(po.dealId)
-                pushLog(state, 'info', `${po.symbol}: orden límite cancelada por vieja (${ageHours.toFixed(1)}h sin llenarse)`)
+                pushLog(state, 'info', `${po.symbol}: orden cancelada por vieja (${ageHours.toFixed(1)}h sin llenarse)`)
             } catch (e) {
                 pushLog(state, 'error', `${po.symbol}: no se pudo cancelar la orden vieja — ${e.message}`)
             }
@@ -261,18 +301,26 @@ async function reconcile(state, realPositions, realWorkingOrders) {
     // realizado se aproxima con el último `upl` observado (el P&L flotante
     // del ciclo anterior, el más reciente disponible sin golpear un
     // endpoint más de historial) — simplificación explícita, documentada.
+    // Lo mismo para `lastKnownPrice`: es el precio de mercado del último
+    // ciclo en que la posición seguía abierta (hasta 5 min de rezago), NO el
+    // precio exacto de cierre real — Capital.com no confirma un precio de
+    // cierre exacto por este camino (ver positionMidPrice más arriba), así
+    // que se usa como la mejor aproximación disponible sin pegarle a un
+    // endpoint de historial sin verificar contra la API real.
     for (let i = state.openPositions.length - 1; i >= 0; i--) {
         const op = state.openPositions[i]
         const real = positionByDealId.get(op.dealId)
         if (real) {
-            op.lastKnownUpl = real.upl ?? op.lastKnownUpl
+            op.lastKnownUpl = real.position.upl ?? op.lastKnownUpl
+            op.lastKnownPrice = positionMidPrice(real.market) ?? op.lastKnownPrice
             continue
         }
         state.openPositions.splice(i, 1)
         const pnl = op.lastKnownUpl ?? 0
         state.trades.push({
             symbol: op.symbol, dealId: op.dealId, isBull: op.isBull,
-            entry: op.entry, sl: op.sl, tp: op.tp, size: op.size,
+            entry: op.entry, sl: op.sl, tp: op.tp, size: op.size, margin: op.margin ?? null,
+            exitPrice: op.lastKnownPrice ?? null,
             openedAt: op.openedAt, closedAt: new Date().toISOString(),
             outcome: pnl >= 0 ? 'win' : 'loss', pnl,
         })
@@ -378,6 +426,7 @@ async function runCycle(circuitBreaker) {
     for (const symbol of PAIRS) {
         const stateNow = await readState()
         if (!stateNow.pairs[symbol]?.enabled) continue // apagado — no se abren operativas nuevas para este par
+        const orderSize = stateNow.pairs[symbol]?.orderSize ?? DEFAULT_ORDER_SIZE
 
         try {
             const { m5, h4 } = await refreshCandles(symbol)
@@ -406,7 +455,7 @@ async function runCycle(circuitBreaker) {
                 const gbpUsd = await fetchMarketDetails('GBPUSD')
                 gbpUsdRate = gbpUsd.bid
             }
-            const requiredMargin = marginUsdFor(market.baseCcy, ORDER_SIZE, latest.entry, market.marginFactor, gbpUsdRate)
+            const requiredMargin = marginUsdFor(market.baseCcy, orderSize, latest.entry, market.marginFactor, gbpUsdRate)
             const acctNow = await getAccount()
             if (requiredMargin > acctNow.available) {
                 log('warn', `${symbol}: setup encontrado pero falta margen (necesita $${requiredMargin.toFixed(2)}, disponible $${acctNow.available.toFixed(2)}) — se omite.`)
@@ -419,22 +468,29 @@ async function runCycle(circuitBreaker) {
             const profitLevel = roundToTick(latest.tp1, market.tickSize)
             const direction = latest.isBull ? 'BUY' : 'SELL'
 
-            log('info', `${symbol}: señal nueva (${direction}) entry=${level} sl=${stopLevel} tp=${profitLevel} rr=${latest.rr.toFixed(2)} — mandando orden límite real por ${ORDER_SIZE} unidades (margen≈$${requiredMargin.toFixed(2)})`)
-            const order = await placeLimitOrder({ epic: symbol, direction, size: ORDER_SIZE, level, stopLevel, profitLevel })
+            log('info', `${symbol}: señal nueva (${direction}) entry≈${level} sl=${stopLevel} tp=${profitLevel} rr=${latest.rr.toFixed(2)} — mandando orden A MERCADO real por ${orderSize} unidades (margen≈$${requiredMargin.toFixed(2)})`)
+            const order = await placeMarketOrder({ epic: symbol, direction, size: orderSize, stopLevel, profitLevel })
             const confirmation = DRY_RUN ? null : await getConfirmation(order.dealReference).catch(() => null)
             const accepted = !DRY_RUN && (confirmation?.dealStatus === 'ACCEPTED' || confirmation == null) // sin confirmación clara, se asume aceptada y se reconcilia en el próximo ciclo
 
             await updateState(s => {
                 s.lastActedChochTime[symbol] = latest.chochTime // se marca atendido incluso en dry-run, para no repetir la misma señal cada ciclo de prueba
                 if (DRY_RUN) {
-                    pushLog(s, 'info', `[DRY RUN] ${symbol}: señal detectada, orden NO enviada de verdad (${direction} ${ORDER_SIZE} @ ${level}, SL ${stopLevel}, TP ${profitLevel})`)
+                    pushLog(s, 'info', `[DRY RUN] ${symbol}: señal detectada, orden NO enviada de verdad (${direction} ${orderSize} @ ${level}, SL ${stopLevel}, TP ${profitLevel})`)
                 } else if (accepted) {
+                    // Entra a pendingOrders igual que antes (no directo a openPositions):
+                    // reconcile() ya sabe promover pendingOrders -> openPositions en cuanto
+                    // aparece en /positions (el próximo ciclo, ~5 min), y ese mismo camino
+                    // cubre el caso "confirmation == null" sin duplicar lógica. Con una orden
+                    // a mercado esto se resuelve casi siempre en el ciclo siguiente (se llena
+                    // al toque), a diferencia de una LIMIT que podía tardar horas.
                     s.pendingOrders.push({
                         symbol, dealId: confirmation?.dealId ?? order.dealReference, dealReference: order.dealReference,
-                        isBull: latest.isBull, entry: level, sl: stopLevel, tp: profitLevel, size: ORDER_SIZE,
+                        isBull: latest.isBull, entry: confirmation?.level ?? level, sl: stopLevel, tp: profitLevel, size: orderSize,
+                        margin: requiredMargin,
                         placedAt: new Date().toISOString(), chochTime: latest.chochTime,
                     })
-                    pushLog(s, 'info', `${symbol}: orden límite real colocada (${direction} ${ORDER_SIZE} @ ${level}, SL ${stopLevel}, TP ${profitLevel})`)
+                    pushLog(s, 'info', `${symbol}: orden a mercado real colocada (${direction} ${orderSize} ≈@ ${confirmation?.level ?? level}, SL ${stopLevel}, TP ${profitLevel})`)
                 } else {
                     pushLog(s, 'error', `${symbol}: la orden fue RECHAZADA por Capital.com — ${confirmation?.reason ?? 'sin detalle'}`)
                 }

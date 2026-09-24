@@ -15,21 +15,37 @@ import { useEffect, useState } from 'react'
 
 const PAIRS = ['EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'GBPJPY', 'USDCHF']
 const POLL_MS = 20_000
-const CHART_WINDOWS = [{ label: '7 días', days: 7 }, { label: '30 días', days: 30 }, { label: '90 días', days: 90 }]
+// Mismos límites que MIN/MAX_ORDER_SIZE en app/lib/forexBotState.js —
+// hardcodeados acá en vez de importados porque ese archivo usa fs/promises
+// (solo Node), no se puede meter en el bundle del cliente (mismo motivo por
+// el que PAIRS arriba también está duplicado en vez de importado).
+const MIN_ORDER_SIZE = 100
+const MAX_ORDER_SIZE = 100_000
+const CHART_WINDOWS = [7, 30, 90] // mismos rangos que app/dashboard/page.jsx
 
 function fmtMoney(n) {
     if (n == null || !Number.isFinite(n)) return '—'
     return `${n >= 0 ? '+' : ''}$${n.toFixed(2)}`
 }
+function fmtPrice(n) {
+    if (n == null || !Number.isFinite(n)) return '—'
+    return n.toFixed(5)
+}
+// Mismos formatters que app/dashboard/page.jsx (fmt/fmtS) — usados por el
+// BarChart de abajo, copiado de ahí para que el gráfico de "P&L por día" se
+// vea y se comporte igual en las dos páginas.
+const fmt  = (v, d = 2) => {
+    const n = parseFloat(v)
+    return isNaN(n) ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })
+}
+const fmtS = (v, d = 2) => {
+    const n = parseFloat(v)
+    if (isNaN(n)) return '—'
+    return (n >= 0 ? '+' : '') + fmt(n, d)
+}
 function fmtDate(iso) {
     if (!iso) return '—'
     return new Date(iso).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' }) + ' CDMX'
-}
-function fmtDay(dateStr) {
-    // dateStr ya viene como 'YYYY-MM-DD' (fecha calendario, sin hora) — no
-    // pasar por Date con zona horaria para no correrla un día para atrás/adelante.
-    const [y, m, d] = dateStr.split('-')
-    return `${d}/${m}`
 }
 
 // Lunes (ISO) de la semana a la que pertenece `dateStr` — para agrupar
@@ -69,25 +85,98 @@ function buildDailyPnl(dailyCapital, days) {
     return out
 }
 
-// Barras simples en CSS puro — no hace falta una librería de gráficas para
-// un P&L diario de barras verdes/rojas.
-function DailyPnlChart({ data }) {
-    if (!data.length) return <p className="text-xs text-gray-400 dark:text-slate-500">Sin datos suficientes todavía en esta ventana.</p>
-    const maxAbs = Math.max(0.01, ...data.map(d => Math.abs(d.pnl)))
+// ── SVG Bar Chart — copiado tal cual de app/dashboard/page.jsx (BarChart) ──
+// para que "P&L por día" se vea y se comporte igual en ambas páginas
+// (gridlines, eje con valores, tooltip al pasar el mouse) en vez de las
+// barras de puro CSS que tenía antes esta página (sin eje ni tooltip).
+// Depende de las variables CSS --chart-grid/--chart-axis/--chart-zero
+// definidas globalmente en app/globals.css (mismas que ya usa el dashboard).
+function BarChart({ data }) {
+    const [hoverIdx, setHoverIdx] = useState(null)
+
+    if (!data || data.length === 0) return (
+        <div className="h-32 flex items-center justify-center text-sm text-gray-300 dark:text-slate-600">
+            Acumulando datos diarios...
+        </div>
+    )
+    const W = 900, H = 150
+    const p = { t: 10, r: 20, b: 28, l: 64 }
+    const cW = W - p.l - p.r
+    const cH = H - p.t - p.b
+
+    const maxA  = Math.max(...data.map(d => Math.abs(d.pnl)), 0.01)
+    const zeroY = p.t + cH / 2
+    const scY   = (cH / 2) / maxA
+    const bw    = Math.max(4, (cW / data.length) * 0.65)
+    const colW  = cW / data.length
+
     return (
-        <div className="flex items-end gap-0.5 h-32 overflow-x-auto pb-1">
-            {data.map((d, i) => {
-                const heightPct = Math.max(4, (Math.abs(d.pnl) / maxAbs) * 100)
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 150, overflow: 'visible' }}>
+            {[-maxA, 0, maxA].map((t, i) => {
+                const y = zeroY - t * scY
                 return (
-                    <div key={i} className="flex flex-col items-center justify-end h-full flex-shrink-0" style={{ width: 10 }} title={`${fmtDay(d.date)}: ${fmtMoney(d.pnl)}`}>
-                        <div
-                            className={`w-full rounded-sm ${d.pnl >= 0 ? 'bg-green-500' : 'bg-red-500'}`}
-                            style={{ height: `${heightPct}%` }}
-                        />
-                    </div>
+                    <g key={i}>
+                        <line x1={p.l} x2={p.l + cW} y1={y} y2={y}
+                              stroke={t === 0 ? 'var(--chart-zero)' : 'var(--chart-grid)'}
+                              strokeWidth={t === 0 ? 1.5 : 1} />
+                        {t !== 0 && (
+                            <text x={p.l - 8} y={y + 4} textAnchor="end" fontSize="10" fill="var(--chart-axis)">
+                                {fmtS(t, 1)}
+                            </text>
+                        )}
+                    </g>
                 )
             })}
-        </div>
+            {data.map((d, i) => {
+                const x  = p.l + (i + 0.5) * colW
+                const bh = Math.max(Math.abs(d.pnl) * scY, 2)
+                const y  = d.pnl >= 0 ? zeroY - bh : zeroY
+                return (
+                    <rect key={i} x={x - bw / 2} y={y} width={bw} height={bh}
+                          rx="2" fill={d.pnl >= 0 ? '#22c55e' : '#ef4444'}
+                          opacity={hoverIdx === i ? 1 : 0.85} />
+                )
+            })}
+            {data.map((d, i) => {
+                if (i !== 0 && i !== data.length - 1 && (i + 1) % 5 !== 0) return null
+                const x = p.l + (i + 0.5) * colW
+                return (
+                    <text key={i} x={x} y={H - 4} textAnchor="middle" fontSize="9" fill="var(--chart-axis)">
+                        {d.date.slice(5)}
+                    </text>
+                )
+            })}
+            {/* Zonas invisibles de hover — una por columna, de todo el alto
+                del chart, así funciona incluso con barras de 2px (el mínimo)
+                que serían casi imposibles de "pisar" con el cursor. */}
+            {data.map((_, i) => {
+                const x = p.l + i * colW
+                return (
+                    <rect key={i} x={x} y={p.t} width={colW} height={cH}
+                          fill="transparent" style={{ cursor: 'pointer' }}
+                          onMouseEnter={() => setHoverIdx(i)}
+                          onMouseLeave={() => setHoverIdx(null)} />
+                )
+            })}
+            {hoverIdx != null && (() => {
+                const d  = data[hoverIdx]
+                const x  = p.l + (hoverIdx + 0.5) * colW
+                const label   = `${d.date}  ${fmtS(d.pnl, 1)}`
+                const boxW    = 18 + label.length * 5.6
+                const boxH    = 22
+                const boxX    = Math.min(Math.max(x - boxW / 2, p.l), p.l + cW - boxW)
+                const boxY    = 2
+                return (
+                    <g pointerEvents="none">
+                        <rect x={boxX} y={boxY} width={boxW} height={boxH} rx="4"
+                              fill="var(--chart-tooltip-bg, #1f2937)" opacity="0.95" />
+                        <text x={boxX + boxW / 2} y={boxY + boxH / 2 + 4} textAnchor="middle" fontSize="13" fontWeight="600" fill="#f3f4f6">
+                            {d.date}  <tspan fill={d.pnl >= 0 ? '#4ade80' : '#f87171'}>{fmtS(d.pnl, 1)}</tspan>
+                        </text>
+                    </g>
+                )
+            })()}
+        </svg>
     )
 }
 
@@ -100,6 +189,9 @@ export default function ForexBotPage() {
     const [maxPosDraft, setMaxPosDraft] = useState(null) // valor en edición del input — null = todavía no se tocó, se muestra el del servidor
     const [savingMaxPos, setSavingMaxPos] = useState(false)
     const [maxPosSaved, setMaxPosSaved] = useState(false)
+    const [orderSizeDraft, setOrderSizeDraft] = useState(null) // igual que maxPosDraft, pero para el volumen del par activo — se resetea al cambiar de pestaña (ver setTab)
+    const [savingOrderSize, setSavingOrderSize] = useState(false)
+    const [orderSizeSaved, setOrderSizeSaved] = useState(false)
 
     const load = async () => {
         try {
@@ -140,6 +232,28 @@ export default function ForexBotPage() {
             setMaxPosDraft(null) // vuelve a mostrar el valor confirmado del servidor
         } finally {
             setSavingMaxPos(false)
+        }
+    }
+
+    // Cambia de pestaña y limpia el draft de volumen — si no, al pasar de
+    // EURUSD a USDJPY quedaría mostrando/pisando el valor que se estaba
+    // editando para el par anterior.
+    const setTab = symbol => {
+        setActiveTab(symbol)
+        setOrderSizeDraft(null)
+    }
+
+    const saveOrderSize = async () => {
+        const n = parseInt(orderSizeDraft, 10)
+        if (!Number.isInteger(n) || n < MIN_ORDER_SIZE || n > MAX_ORDER_SIZE) return
+        setSavingOrderSize(true)
+        try {
+            const res = await fetch('/api/forex-bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: activeTab, orderSize: n }) })
+            if (res.ok) { setOrderSizeSaved(true); setTimeout(() => setOrderSizeSaved(false), 2000) }
+            await load()
+            setOrderSizeDraft(null)
+        } finally {
+            setSavingOrderSize(false)
         }
     }
 
@@ -241,7 +355,7 @@ export default function ForexBotPage() {
                     <button
                         key={sym}
                         type="button"
-                        onClick={() => setActiveTab(sym)}
+                        onClick={() => setTab(sym)}
                         className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
                             activeTab === sym
                                 ? 'bg-indigo-600 text-white'
@@ -273,6 +387,27 @@ export default function ForexBotPage() {
                 <p className="text-[10px] text-gray-400 dark:text-slate-500 -mt-2">
                     Apagado = no se abren operativas NUEVAS para este par (las que ya están abiertas/pendientes siguen su curso normal).
                 </p>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-gray-500 dark:text-slate-400">
+                        Volumen por operación nueva ({activeTab}):
+                    </span>
+                    <input
+                        type="number" min={MIN_ORDER_SIZE} max={MAX_ORDER_SIZE} step={1}
+                        value={orderSizeDraft ?? state.pairs[activeTab]?.orderSize ?? MIN_ORDER_SIZE}
+                        onChange={e => setOrderSizeDraft(e.target.value)}
+                        title={`Unidades de la divisa base con las que se abre cada operativa NUEVA de ${activeTab} — mínimo ${MIN_ORDER_SIZE} (minDealSize de Capital.com). No afecta operativas ya abiertas.`}
+                        className="w-24 px-1.5 py-1 rounded-md border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-xs"
+                    />
+                    <button
+                        type="button"
+                        onClick={saveOrderSize}
+                        disabled={savingOrderSize || orderSizeDraft == null}
+                        className="text-[11px] font-semibold px-2 py-1 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {orderSizeSaved ? '✓ Guardado' : 'Guardar'}
+                    </button>
+                </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
@@ -306,7 +441,9 @@ export default function ForexBotPage() {
                                         <th className="py-1 pr-3">Entrada</th>
                                         <th className="py-1 pr-3">SL</th>
                                         <th className="py-1 pr-3">TP</th>
-                                        <th className="py-1 pr-3">Tamaño</th>
+                                        <th className="py-1 pr-3">Volumen</th>
+                                        <th className="py-1 pr-3">Margen</th>
+                                        <th className="py-1 pr-3">P&L no realizado</th>
                                         <th className="py-1 pr-3">Desde</th>
                                     </tr>
                                 </thead>
@@ -321,10 +458,14 @@ export default function ForexBotPage() {
                                             <td className="py-1 pr-3">
                                                 <span className={p.isBull ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'}>{p.isBull ? 'LONG' : 'SHORT'}</span>
                                             </td>
-                                            <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{p.entry?.toFixed(5)}</td>
-                                            <td className="py-1 pr-3 text-red-500">{p.sl?.toFixed(5)}</td>
-                                            <td className="py-1 pr-3 text-green-600">{p.tp?.toFixed(5)}</td>
+                                            <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{fmtPrice(p.entry)}</td>
+                                            <td className="py-1 pr-3 text-red-500">{fmtPrice(p.sl)}</td>
+                                            <td className="py-1 pr-3 text-green-600">{fmtPrice(p.tp)}</td>
                                             <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.size}</td>
+                                            <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.margin != null ? `$${p.margin.toFixed(2)}` : '—'}</td>
+                                            <td className={`py-1 pr-3 font-medium ${p.kind !== 'abierta' ? 'text-gray-400 dark:text-slate-500' : p.lastKnownUpl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                                                {p.kind === 'abierta' ? fmtMoney(p.lastKnownUpl) : '—'}
+                                            </td>
                                             <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(p.openedAt ?? p.placedAt)}</td>
                                         </tr>
                                     ))}
@@ -344,6 +485,9 @@ export default function ForexBotPage() {
                                     <tr className="text-left text-gray-400 dark:text-slate-500 border-b border-gray-100 dark:border-slate-700">
                                         <th className="py-1 pr-3">Dirección</th>
                                         <th className="py-1 pr-3">Entrada</th>
+                                        <th className="py-1 pr-3">Salida</th>
+                                        <th className="py-1 pr-3">Volumen</th>
+                                        <th className="py-1 pr-3">Margen</th>
                                         <th className="py-1 pr-3">Apertura</th>
                                         <th className="py-1 pr-3">Cierre</th>
                                         <th className="py-1 pr-3">Resultado</th>
@@ -356,7 +500,12 @@ export default function ForexBotPage() {
                                             <td className="py-1 pr-3">
                                                 <span className={t.isBull ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'}>{t.isBull ? 'LONG' : 'SHORT'}</span>
                                             </td>
-                                            <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{t.entry?.toFixed(5)}</td>
+                                            <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{fmtPrice(t.entry)}</td>
+                                            <td className="py-1 pr-3 text-gray-600 dark:text-slate-300" title="Precio de mercado del último ciclo antes de cerrarse — aproximado, no el precio exacto de cierre de Capital.com.">
+                                                {fmtPrice(t.exitPrice)}
+                                            </td>
+                                            <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{t.size}</td>
+                                            <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{t.margin != null ? `$${t.margin.toFixed(2)}` : '—'}</td>
                                             <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(t.openedAt)}</td>
                                             <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(t.closedAt)}</td>
                                             <td className="py-1 pr-3">
@@ -414,26 +563,45 @@ export default function ForexBotPage() {
                 )}
             </div>
 
-            {/* ── Gráficas de P&L diario ── */}
-            <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-sm font-semibold text-gray-700 dark:text-slate-200">P&L por día</h2>
-                    <div className="inline-flex rounded-lg border border-gray-200 dark:border-slate-600 overflow-hidden">
-                        {CHART_WINDOWS.map(w => (
-                            <button
-                                key={w.days}
-                                type="button"
-                                onClick={() => setChartDays(w.days)}
-                                className={`px-3 py-1 text-xs font-semibold transition-colors ${
-                                    chartDays === w.days ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-900 text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
-                                }`}
-                            >
-                                {w.label}
-                            </button>
-                        ))}
+            {/* ── Gráfica de P&L diario — mismo BarChart SVG que app/dashboard/page.jsx
+                (gridlines + tooltip al hover + leyenda), en vez de las barras de
+                puro CSS que tenía antes esta página. ── */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                    <div>
+                        <p className="text-sm font-semibold text-gray-700 dark:text-slate-200">Ganancias / Pérdidas diarias</p>
+                        <p className="text-xs text-gray-400 dark:text-slate-500">Últimos {chartDays} días · USD</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="flex gap-3 text-xs text-gray-400 dark:text-slate-500">
+                            <span className="flex items-center gap-1.5">
+                                <span className="w-2.5 h-2.5 rounded-sm bg-green-500 inline-block" />
+                                Ganancia
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                                <span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" />
+                                Pérdida
+                            </span>
+                        </div>
+                        <div className="flex rounded-lg border border-gray-200 dark:border-slate-700 overflow-hidden">
+                            {CHART_WINDOWS.map(days => (
+                                <button
+                                    key={days}
+                                    type="button"
+                                    onClick={() => setChartDays(days)}
+                                    className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                                        chartDays === days
+                                            ? 'bg-gray-800 text-white dark:bg-slate-100 dark:text-slate-900'
+                                            : 'bg-white text-gray-500 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                                    }`}
+                                >
+                                    {days}d
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
-                <DailyPnlChart data={dailyPnl} />
+                <BarChart data={dailyPnl} />
             </div>
 
             {/* ── Log del bot ── */}

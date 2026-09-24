@@ -1,6 +1,6 @@
 // ─── Descarga paginada de velas históricas (Bitunix) ──────────────────────────
 // Usada por el backtest histórico de patrones (app/backtest-historico), que
-// soporta velas de 1H, 4H o 1D (selector de intervalo en la página).
+// soporta velas de 15M, 1H, 4H o 1D (selector de intervalo en la página).
 //
 // Antes usaba Binance (era app/lib/binanceHistory.js); se migró a Bitunix (ver
 // app/lib/bitunixMarket.js) para que el backtest evalúe patrones sobre los
@@ -16,10 +16,13 @@ import { fetchKlinesRange } from './bitunixMarket'
 // `scale` = cuántas "velas de 1H" cubre una vela de este intervalo — el valor
 // que hay que pasarle a las funciones de backtestPatternEngine.js (windowSize,
 // simulateSymbolTrades, evaluateWindow) para que sus ventanas cubran el mismo
-// lapso real sin importar el intervalo.
-export const INTERVAL_SCALE = { '1h': 1, '4h': 4, '1d': 24 };
+// lapso real sin importar el intervalo. '15m' (0.25 = 15/60) tiene su propio
+// apexDaysTarget calibrado con datos reales — ver BACKTEST_APEX_DAYS_TARGET_
+// BY_SCALE en backtestPatternEngine.js. 5 minutos se probó y se descartó ahí
+// mismo (0 señales incluso con historial completo) — no se agrega aquí.
+export const INTERVAL_SCALE = { '1h': 1, '4h': 4, '1d': 24, '15m': 0.25 };
 
-// Descarga TODAS las velas del `interval` elegido ('1h', '4h' o '1d') entre
+// Descarga TODAS las velas del `interval` elegido ('1h', '4h', '1d' o '15m') entre
 // startMs y endMs (epoch ms) para un símbolo de Bitunix (ej. "BTCUSDT").
 // `onBatch` se llama tras cada página, útil para reportar progreso. Devuelve
 // [] si el símbolo no existe en Bitunix o no tiene datos en el rango (no

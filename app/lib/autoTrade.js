@@ -22,6 +22,30 @@ const AUTO_TRADE_ENABLED_LS_KEY = 'trading_auto_trade_enabled';
 const AUTO_TRADE_APEX_DAYS_LS_KEY = 'trading_auto_trade_apex_days';
 const AUTO_TRADE_LEVERAGE_LS_KEY = 'trading_auto_trade_leverage';
 
+// `scope` distingue qué página está guardando/leyendo (ej. 'patrones',
+// 'patrones-1h', 'patrones-1h-full') — antes las 3 páginas compartían la MISMA
+// clave de localStorage para monto/apalancamiento/ápice/on-off, así que
+// configurar un valor en una página pisaba lo que la otra leía al recargar.
+// Sin `scope` (undefined), se sigue usando la clave "plana" de siempre — eso
+// es justo lo que aprovecha el fallback de abajo para migrar el valor ya
+// guardado a las 3 páginas la primera vez que cada una lee con su propio
+// scope, en vez de resetear todo a los valores por defecto.
+function scopedKey(base, scope) {
+    return scope ? `${base}::${scope}` : base;
+}
+
+function readScoped(base, scope) {
+    if (!scope) return localStorage.getItem(base);
+    const scopedValue = localStorage.getItem(scopedKey(base, scope));
+    return scopedValue !== null ? scopedValue : localStorage.getItem(base);
+}
+
+function writeScoped(base, scope, value) {
+    const key = scopedKey(base, scope);
+    localStorage.setItem(key, value);
+    return key;
+}
+
 // ─── Precisión de cantidad por símbolo ──────────────────────────────────────
 // Antes la cantidad se formateaba con un heurístico genérico
 // (qty.toFixed(qty<1?6:qty<100?4:2)) que asume la precisión sin consultarla.
@@ -85,18 +109,18 @@ export async function formatPriceForSymbol(symbolPair, price) {
 // Monto fijo (en USDT) a usar en cada apertura automática. Persistido en
 // localStorage — se mantiene hasta que el usuario lo cambie manualmente desde
 // el campo de texto en patrones/page.jsx o patrones-1h/page.jsx.
-export function getTradeAmount() {
+export function getTradeAmount(scope) {
     if (typeof window === 'undefined') return DEFAULT_TRADE_AMOUNT_USDT;
-    const n = parseFloat(localStorage.getItem(TRADE_AMOUNT_LS_KEY));
+    const n = parseFloat(readScoped(TRADE_AMOUNT_LS_KEY, scope));
     return Number.isFinite(n) && n > 0 ? n : DEFAULT_TRADE_AMOUNT_USDT;
 }
 
-export function setTradeAmount(amount) {
+export function setTradeAmount(amount, scope) {
     if (typeof window === 'undefined') return;
     const n = parseFloat(amount);
     if (Number.isFinite(n) && n > 0) {
-        localStorage.setItem(TRADE_AMOUNT_LS_KEY, String(n));
-        mirrorToRemote(TRADE_AMOUNT_LS_KEY, n);
+        const key = writeScoped(TRADE_AMOUNT_LS_KEY, scope, String(n));
+        mirrorToRemote(key, n);
     }
 }
 
@@ -104,35 +128,35 @@ export function setTradeAmount(amount) {
 // afectar el escaneo ni la lista de resultados mostrados. Persistido en
 // localStorage — por defecto activado (mismo comportamiento que antes de
 // existir este switch), hasta que el usuario lo apague manualmente.
-export function isAutoTradeEnabled() {
+export function isAutoTradeEnabled(scope) {
     if (typeof window === 'undefined') return true;
-    const v = localStorage.getItem(AUTO_TRADE_ENABLED_LS_KEY);
+    const v = readScoped(AUTO_TRADE_ENABLED_LS_KEY, scope);
     return v === null ? true : v === 'true';
 }
 
-export function setAutoTradeEnabled(enabled) {
+export function setAutoTradeEnabled(enabled, scope) {
     if (typeof window === 'undefined') return;
     const value = enabled ? 'true' : 'false';
-    localStorage.setItem(AUTO_TRADE_ENABLED_LS_KEY, value);
-    mirrorToRemote(AUTO_TRADE_ENABLED_LS_KEY, value);
+    const key = writeScoped(AUTO_TRADE_ENABLED_LS_KEY, scope, value);
+    mirrorToRemote(key, value);
 }
 
 // Días de ápice (1-10) que activan la apertura automática. Persistido en
 // localStorage — se mantiene hasta que el usuario lo cambie manualmente desde
 // el campo de texto en patrones/page.jsx o patrones-1h/page.jsx.
-export function getAutoTradeApexDays() {
+export function getAutoTradeApexDays(scope) {
     if (typeof window === 'undefined') return DEFAULT_AUTO_TRADE_APEX_DAYS;
-    const n = parseInt(localStorage.getItem(AUTO_TRADE_APEX_DAYS_LS_KEY), 10);
+    const n = parseInt(readScoped(AUTO_TRADE_APEX_DAYS_LS_KEY, scope), 10);
     return Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS
         ? n : DEFAULT_AUTO_TRADE_APEX_DAYS;
 }
 
-export function setAutoTradeApexDays(days) {
+export function setAutoTradeApexDays(days, scope) {
     if (typeof window === 'undefined') return;
     const n = parseInt(days, 10);
     if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS) {
-        localStorage.setItem(AUTO_TRADE_APEX_DAYS_LS_KEY, String(n));
-        mirrorToRemote(AUTO_TRADE_APEX_DAYS_LS_KEY, n);
+        const key = writeScoped(AUTO_TRADE_APEX_DAYS_LS_KEY, scope, String(n));
+        mirrorToRemote(key, n);
     }
 }
 
@@ -142,25 +166,25 @@ export function setAutoTradeApexDays(days) {
 // hasta AUTO_MAX_LEVERAGE igual que antes — esto solo cambia dónde arranca
 // esa escalada. Persistido en localStorage — se mantiene hasta que el
 // usuario lo cambie manualmente desde el campo de texto en esas páginas.
-export function getAutoTradeLeverage() {
+export function getAutoTradeLeverage(scope) {
     if (typeof window === 'undefined') return DEFAULT_AUTO_TRADE_LEVERAGE;
-    const n = parseInt(localStorage.getItem(AUTO_TRADE_LEVERAGE_LS_KEY), 10);
+    const n = parseInt(readScoped(AUTO_TRADE_LEVERAGE_LS_KEY, scope), 10);
     return Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE
         ? n : DEFAULT_AUTO_TRADE_LEVERAGE;
 }
 
-export function setAutoTradeLeverage(leverage) {
+export function setAutoTradeLeverage(leverage, scope) {
     if (typeof window === 'undefined') return;
     const n = parseInt(leverage, 10);
     if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE) {
-        localStorage.setItem(AUTO_TRADE_LEVERAGE_LS_KEY, String(n));
-        mirrorToRemote(AUTO_TRADE_LEVERAGE_LS_KEY, n);
+        const key = writeScoped(AUTO_TRADE_LEVERAGE_LS_KEY, scope, String(n));
+        mirrorToRemote(key, n);
     }
 }
 
 // Usado para decidir la apertura automática — ápice configurable (ver getAutoTradeApexDays).
-export function isApexTarget(result) {
-    return result?.daysToApex != null && result.daysToApex === getAutoTradeApexDays();
+export function isApexTarget(result, scope) {
+    return result?.daysToApex != null && result.daysToApex === getAutoTradeApexDays(scope);
 }
 
 // Usado para filtrar qué tarjetas se muestran en los resultados — ápice 8, 9 o 10.
@@ -205,7 +229,11 @@ async function fetchAvailableBalance() {
 // mercado. Si Bitunix rechaza la orden, reintenta subiendo el apalancamiento
 // hasta AUTO_MAX_LEVERAGE antes de rendirse — mismo comportamiento que el
 // flujo manual de "Abrir posición" en patrones-1h/page.jsx (también a mercado).
-async function placeAutoOrder({ symbolPair, isBull, sl, tp1, qtyStr }) {
+// `initialLeverage` es el apalancamiento con el que ya se calculó `qtyStr` en
+// tryAutoOpenPosition (puede ser mayor al configurado por el usuario si hubo
+// que escalarlo para superar el mínimo operable de Bitunix) — se recibe en vez
+// de releerlo de localStorage por scope para no perder esa escalada.
+async function placeAutoOrder({ symbolPair, isBull, sl, tp1, qtyStr, initialLeverage }) {
     const attempt = async (lev) => {
         const levRes = await fetch("/api/bitunix/api/v1/futures/account/change_leverage", {
             method:  "POST",
@@ -237,7 +265,7 @@ async function placeAutoOrder({ symbolPair, isBull, sl, tp1, qtyStr }) {
         return { ok, data: { step: "place_order", leverage: lev, ...data } };
     };
 
-    const configured = getAutoTradeLeverage();
+    const configured = initialLeverage;
     let lev    = configured;
     let result = await attempt(lev);
 
@@ -316,7 +344,7 @@ async function sendTradeFailedEmail(payload) {
 // Manda correo tanto si la orden se coloca con éxito como si falla (salvo
 // 'already_open', que es un skip esperado/rutinario, no una falla real) —
 // para que una señal detectada nunca desaparezca sin dejar rastro.
-export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }) {
+export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel, scope }) {
     const sym        = coin.symbol.toUpperCase();
     const symbolPair = `${sym}USDT`;
 
@@ -345,23 +373,41 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
             return { opened: false, reason: 'already_open' };
         }
 
-        const capital  = getTradeAmount();      // monto configurado = margen objetivo, no el nocional
-        const leverage = getAutoTradeLeverage();
-        console.log(`[AutoTrade] ${symbolPair}: monto/operación configurado = $${capital} (margen objetivo @ ${leverage}×)`);
+        const capital = getTradeAmount(scope);      // monto configurado = margen objetivo, no el nocional
+        const configuredLeverage = getAutoTradeLeverage(scope);
+        console.log(`[AutoTrade] ${symbolPair}: monto/operación configurado = $${capital} (margen objetivo @ ${configuredLeverage}×)`);
         const balance = await fetchAvailableBalance();
         if (capital > balance) {
             return fail('insufficient_balance', { capital, balance });
         }
 
         // El monto configurado es el margen que se quiere comprometer — el nocional
-        // (y por lo tanto qty) se calcula multiplicando por el apalancamiento inicial,
-        // así margen = nocional ÷ apalancamiento = capital, en vez de capital ÷ apalancamiento.
-        const notional = capital * leverage;
-        const qty = levels.entry > 0 ? notional / levels.entry : 0;
+        // (y por lo tanto qty) se calcula multiplicando por el apalancamiento, así
+        // margen = nocional ÷ apalancamiento = capital, en vez de capital ÷ apalancamiento.
+        // Si con el apalancamiento configurado la qty resultante queda por debajo del
+        // mínimo operable de Bitunix (típico en símbolos de precio bajo con capital
+        // chico, ej. $20 @ 2×), se escala el apalancamiento INICIAL hacia arriba antes
+        // de rendirse — a más apalancamiento, más nocional (y más qty) para el mismo
+        // margen. Antes esto no se intentaba aquí: la señal se descartaba con
+        // 'qty_below_minimum' aunque escalar el apalancamiento la hubiera resuelto
+        // (el único reintento con más apalancamiento vivía en placeAutoOrder, y ese
+        // corre después de colocar la orden — nunca se alcanzaba si qty ya venía nula).
+        let leverage = configuredLeverage;
+        let notional = capital * leverage;
+        let qty      = levels.entry > 0 ? notional / levels.entry : 0;
         if (!(qty > 0)) return fail('invalid_qty', { notional, entry: levels.entry });
-        const qtyStr = await formatQtyForSymbol(symbolPair, qty);
+        let qtyStr = await formatQtyForSymbol(symbolPair, qty);
+        while (!qtyStr && leverage < AUTO_MAX_LEVERAGE) {
+            leverage += 1;
+            notional  = capital * leverage;
+            qty       = notional / levels.entry;
+            qtyStr    = await formatQtyForSymbol(symbolPair, qty);
+        }
         if (!qtyStr) {
-            return fail('qty_below_minimum', { qty });
+            return fail('qty_below_minimum', { qty, capital, triedUpToLeverage: leverage });
+        }
+        if (leverage !== configuredLeverage) {
+            console.log(`[AutoTrade] ${symbolPair}: qty por debajo del mínimo @ ${configuredLeverage}×, escalado a ${leverage}× para cumplir el mínimo operable de Bitunix.`);
         }
 
         // calcLevels calcula SL/TP1 con aritmética de punto flotante — llegan con
@@ -373,7 +419,7 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel }
         const tp1Str = await formatPriceForSymbol(symbolPair, levels.tp1);
 
         const order = await placeAutoOrder({
-            symbolPair, isBull, sl: slStr, tp1: tp1Str, qtyStr,
+            symbolPair, isBull, sl: slStr, tp1: tp1Str, qtyStr, initialLeverage: leverage,
         });
 
         if (!order.ok) {

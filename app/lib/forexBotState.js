@@ -20,15 +20,28 @@ export const DEFAULT_MAX_CONCURRENT_POSITIONS = 1 // ver la nota de gestión de 
 export const MIN_MAX_CONCURRENT_POSITIONS = 1
 export const MAX_MAX_CONCURRENT_POSITIONS = 6 // no tiene sentido pedir más que el número de pares
 
+// Volumen (unidades de la divisa base) con el que el bot abre cada operativa
+// NUEVA de ese par — antes era ORDER_SIZE, una sola constante fija en
+// scripts/forex-bot.mjs para los 6 pares; ahora es configurable POR PAR desde
+// /forex (pedido explícito del usuario), igual que `enabled`. MIN=100 porque
+// es el minDealSize real de Capital.com, verificado igual para los 6 pares
+// (ver scripts/forex-bot.mjs) — no tiene sentido permitir menos, Capital.com
+// lo rechazaría igual. MAX=100,000 es un techo de seguridad arbitrario (no
+// viene de Capital.com) para una cuenta chica — evita un typo tipo "100000"
+// en vez de "1000" comprometiendo de golpe muchísimo más margen del previsto.
+export const DEFAULT_ORDER_SIZE = 100
+export const MIN_ORDER_SIZE = 100
+export const MAX_ORDER_SIZE = 100_000
+
 function defaultState() {
     const pairs = {}
-    for (const sym of PAIRS) pairs[sym] = { enabled: true }
+    for (const sym of PAIRS) pairs[sym] = { enabled: true, orderSize: DEFAULT_ORDER_SIZE }
     return {
-        pairs,               // { [symbol]: { enabled: bool } } — el switch de encendido/apagado
+        pairs,               // { [symbol]: { enabled: bool, orderSize: number } } — switch de encendido/apagado + volumen por par
         maxConcurrentPositions: DEFAULT_MAX_CONCURRENT_POSITIONS, // configurable desde /forex — ver scripts/forex-bot.mjs, lo lee en cada ciclo
-        pendingOrders: [],   // órdenes límite YA mandadas a Capital.com, esperando llenarse: { symbol, dealId, dealReference, isBull, entry, sl, tp, size, placedAt, chochTime }
-        openPositions: [],   // posiciones YA llenas, abiertas por el bot: { symbol, dealId, isBull, entry, sl, tp, size, openedAt, chochTime }
-        trades: [],          // historial cerrado: { symbol, dealId, isBull, entry, sl, tp, size, openedAt, closedAt, outcome: 'win'|'loss', pnl }
+        pendingOrders: [],   // órdenes límite YA mandadas a Capital.com, esperando llenarse: { symbol, dealId, dealReference, isBull, entry, sl, tp, size, margin, placedAt, chochTime }
+        openPositions: [],   // posiciones YA llenas, abiertas por el bot: { symbol, dealId, isBull, entry, sl, tp, size, margin, openedAt, chochTime, lastKnownUpl, lastKnownPrice }
+        trades: [],          // historial cerrado: { symbol, dealId, isBull, entry, sl, tp, size, margin, exitPrice, openedAt, closedAt, outcome: 'win'|'loss', pnl }
         lastActedChochTime: {}, // { [symbol]: ms } — último setup ya atendido por par, para no reaccionar dos veces al mismo CHoCH
         dailyCapital: [],     // { date: 'YYYY-MM-DD', balance } — snapshot diario del balance REAL de la cuenta, para las gráficas 7/30/90 días
         weeklyReports: [],    // { weekStart: 'YYYY-MM-DD' (lunes), startBalance, endBalance } — reporte de cada viernes

@@ -4,7 +4,7 @@
 // página. POST: encender/apagar un par (el bot mismo lee este archivo en
 // cada ciclo — ver scripts/forex-bot.mjs).
 import { NextResponse } from 'next/server'
-import { readState, updateState, PAIRS, MIN_MAX_CONCURRENT_POSITIONS, MAX_MAX_CONCURRENT_POSITIONS } from '../../lib/forexBotState'
+import { readState, updateState, PAIRS, MIN_MAX_CONCURRENT_POSITIONS, MAX_MAX_CONCURRENT_POSITIONS, MIN_ORDER_SIZE, MAX_ORDER_SIZE } from '../../lib/forexBotState'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,9 +50,15 @@ export async function GET(request) {
 //    operativas abiertas/pendientes a la vez EN TODA LA CUENTA. El bot lee
 //    este valor del estado EN CADA CICLO (no es una constante fija en el
 //    script), así que el cambio aplica sin reiniciar el bot ni el servicio.
+//
+// 3) { symbol, orderSize } — pedido explícito del usuario: volumen (unidades
+//    de la divisa base) con el que el bot abre cada operativa NUEVA de ESE
+//    par. El bot lee `pairs[symbol].orderSize` en cada ciclo, igual que
+//    `enabled`; no afecta operativas ya abiertas/pendientes (esas ya
+//    quedaron con el volumen que tenían al momento de abrirse).
 export async function POST(request) {
     const body = await request.json().catch(() => null)
-    const { symbol, enabled, maxConcurrentPositions } = body || {}
+    const { symbol, enabled, maxConcurrentPositions, orderSize } = body || {}
 
     if (maxConcurrentPositions !== undefined) {
         const n = Number(maxConcurrentPositions)
@@ -61,6 +67,18 @@ export async function POST(request) {
         }
         const state = await updateState(s => { s.maxConcurrentPositions = n; return s })
         return NextResponse.json({ maxConcurrentPositions: state.maxConcurrentPositions })
+    }
+
+    if (orderSize !== undefined) {
+        const n = Number(orderSize)
+        if (!PAIRS.includes(symbol) || !Number.isInteger(n) || n < MIN_ORDER_SIZE || n > MAX_ORDER_SIZE) {
+            return NextResponse.json({ error: `orderSize debe ser un entero entre ${MIN_ORDER_SIZE} y ${MAX_ORDER_SIZE}, con un symbol válido` }, { status: 400 })
+        }
+        const state = await updateState(s => {
+            s.pairs[symbol] = { ...(s.pairs[symbol] || {}), orderSize: n }
+            return s
+        })
+        return NextResponse.json({ pairs: state.pairs })
     }
 
     if (!PAIRS.includes(symbol) || typeof enabled !== 'boolean') {

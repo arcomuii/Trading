@@ -5,6 +5,12 @@ import { logBacktestEntry } from "../lib/backtestLog";
 import { fetchKlines, fetchAllTickers } from "../lib/bitunixMarket";
 import { CandlestickChart } from "../../components/CandlestickChart";
 
+// Identifica esta página ante app/lib/autoTrade.js para que monto/operación,
+// apalancamiento, ápice y el switch de auto-trade se guarden en su PROPIA
+// clave de localStorage — antes las 3 páginas de patrones compartían la misma
+// clave y configurar un valor en una pisaba lo que la otra leía al recargar.
+const SETTINGS_SCOPE = 'patrones-1h-full';
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Estas pausas ya eran mucho más chicas que las de CoinGecko anónimo (la fuente
 // de datos original de esta página), con margen de sobra — se mantienen igual
@@ -753,7 +759,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
     const [apiResp,  setApiResp]  = useState(null);
     // Apalancamiento inicial configurado (ver app/lib/autoTrade.js) — con el
     // que arranca esta posición antes de cualquier escalada por rechazo.
-    const initialLeverage = getAutoTradeLeverage();
+    const initialLeverage = getAutoTradeLeverage(SETTINGS_SCOPE);
     const [leverage, setLeverage] = useState(initialLeverage);
     const [manualLeverage, setManualLeverage] = useState(initialLeverage);
 
@@ -789,7 +795,7 @@ function OpenPositionModal({ coin, result, levels, onClose }) {
 
     useEffect(() => { fetchBalance(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const capital = getTradeAmount(); // monto configurado = margen objetivo, no el nocional
+    const capital = getTradeAmount(SETTINGS_SCOPE); // monto configurado = margen objetivo, no el nocional
     const insufficientBalance = balance != null && capital > balance;
     // El nocional (y por lo tanto qty) se calcula multiplicando el margen objetivo por
     // el apalancamiento elegido, así margen = nocional ÷ apalancamiento = capital —
@@ -1688,7 +1694,7 @@ export default function PatronesPage() {
     const [tradeAmount,      setTradeAmountState] = useState(DEFAULT_TRADE_AMOUNT_USDT);
     const [tradeAmountInput, setTradeAmountInput] = useState(String(DEFAULT_TRADE_AMOUNT_USDT));
     useEffect(() => {
-        const stored = getTradeAmount();
+        const stored = getTradeAmount(SETTINGS_SCOPE);
         setTradeAmountState(stored);
         setTradeAmountInput(String(stored));
     }, []);
@@ -1696,7 +1702,7 @@ export default function PatronesPage() {
     const commitTradeAmount = () => {
         const n = parseFloat(tradeAmountInput);
         if (Number.isFinite(n) && n > 0) {
-            setTradeAmount(n);
+            setTradeAmount(n, SETTINGS_SCOPE);
             setTradeAmountState(n);
             setTradeAmountInput(String(n));
         } else {
@@ -1708,11 +1714,11 @@ export default function PatronesPage() {
     // localStorage, por defecto activado. Se inicializa igual en servidor y
     // cliente y se sobreescribe con el valor guardado tras montar.
     const [autoTradeOn, setAutoTradeOnState] = useState(true);
-    useEffect(() => { setAutoTradeOnState(isAutoTradeEnabled()); }, []);
+    useEffect(() => { setAutoTradeOnState(isAutoTradeEnabled(SETTINGS_SCOPE)); }, []);
     const toggleAutoTrade = () => {
         const next = !autoTradeOn;
         setAutoTradeOnState(next);
-        setAutoTradeEnabled(next);
+        setAutoTradeEnabled(next, SETTINGS_SCOPE);
     };
 
     // Días de ápice (1-10) que activan la apertura automática — persistido en
@@ -1720,7 +1726,7 @@ export default function PatronesPage() {
     const [apexDays,      setApexDaysState] = useState(DEFAULT_AUTO_TRADE_APEX_DAYS);
     const [apexDaysInput, setApexDaysInput] = useState(String(DEFAULT_AUTO_TRADE_APEX_DAYS));
     useEffect(() => {
-        const stored = getAutoTradeApexDays();
+        const stored = getAutoTradeApexDays(SETTINGS_SCOPE);
         setApexDaysState(stored);
         setApexDaysInput(String(stored));
     }, []);
@@ -1728,7 +1734,7 @@ export default function PatronesPage() {
     const commitApexDays = () => {
         const n = parseInt(apexDaysInput, 10);
         if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_APEX_DAYS && n <= MAX_AUTO_TRADE_APEX_DAYS) {
-            setAutoTradeApexDays(n);
+            setAutoTradeApexDays(n, SETTINGS_SCOPE);
             setApexDaysState(n);
             setApexDaysInput(String(n));
         } else {
@@ -1742,7 +1748,7 @@ export default function PatronesPage() {
     const [leverage,      setLeverageState] = useState(DEFAULT_AUTO_TRADE_LEVERAGE);
     const [leverageInput, setLeverageInput] = useState(String(DEFAULT_AUTO_TRADE_LEVERAGE));
     useEffect(() => {
-        const stored = getAutoTradeLeverage();
+        const stored = getAutoTradeLeverage(SETTINGS_SCOPE);
         setLeverageState(stored);
         setLeverageInput(String(stored));
     }, []);
@@ -1750,7 +1756,7 @@ export default function PatronesPage() {
     const commitLeverage = () => {
         const n = parseInt(leverageInput, 10);
         if (Number.isFinite(n) && n >= MIN_AUTO_TRADE_LEVERAGE && n <= MAX_AUTO_TRADE_LEVERAGE) {
-            setAutoTradeLeverage(n);
+            setAutoTradeLeverage(n, SETTINGS_SCOPE);
             setLeverageState(n);
             setLeverageInput(String(n));
         } else {
@@ -1918,17 +1924,20 @@ export default function PatronesPage() {
                             // tryAutoOpenPosition verifica en vivo contra Bitunix que no haya
                             // ya una operativa abierta en ese símbolo (sin límite de operativas
                             // concurrentes).
-                            if (autoTradeOn && isApexTarget(data) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
+                            if (autoTradeOn && isApexTarget(data, SETTINGS_SCOPE) && levels && isFavorableTp2(levels) && !autoTradedRef.current.has(coin.id)) {
                                 autoTradedRef.current.add(coin.id);
                                 await tryAutoOpenPosition({
-                                    coin, levels, isBull: bias === 'bullish', patternLabel: meta.label,
+                                    coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, scope: SETTINGS_SCOPE,
                                 });
                             }
 
                             // Log de backtesting: ápice 8-10 días + TP2 favorable (R:R >= 2),
                             // independiente de si el auto-trade real está activado o no.
                             if (isBacktestApexTarget(data) && levels && isFavorableTp2(levels)) {
-                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones-1h', capital: getTradeAmount(), leverage: getAutoTradeLeverage() });
+                                // Antes decía 'patrones-1h' (copiado sin actualizar de esa página) —
+                                // esto mezclaba las entradas de ambas páginas bajo el mismo origen
+                                // en el log de backtesting.
+                                logBacktestEntry({ coin, levels, isBull: bias === 'bullish', patternLabel: meta.label, origen: 'patrones-1h-full', capital: getTradeAmount(SETTINGS_SCOPE), leverage: getAutoTradeLeverage(SETTINGS_SCOPE) });
                             }
                         }
                     }

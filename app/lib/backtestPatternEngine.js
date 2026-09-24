@@ -461,7 +461,22 @@ export function passesAllConditions(result, levels) {
 // muestra chica (24 señales en 5 años) la diferencia contra 2/4/9 no es
 // gigante; si en el futuro se junta más historial vale la pena re-correr
 // esta prueba con más señales para confirmar o ajustar.
-const BACKTEST_APEX_DAYS_TARGET_BY_SCALE = { 1: 10, 4: 2, 24: 5 };
+//
+// scale=0.25 (15M) — antes se intentó agregar 5M (scale=5/60≈0.083): en 60
+// días × 5 símbolos (~75k ventanas) dio CERO señales — daysToApex salía
+// entre 21 y 39 (nunca ≤10, la condición del checklist [3] fallaba en el
+// 100% de los casos) y además `quality>=0.40` fallaba en 85.7% — a 5 minutos
+// el ruido de precio vela a vela es demasiado para que el resto del
+// checklist (calibrado a ojo sobre 1H) se cumpla. Con 15M (scale=0.25) el
+// checklist SÍ se cumple de forma natural: corrida con el histórico COMPLETO
+// que expone Bitunix para 15M (~2 años, tope real de la API, BTC/ETH/SOL/
+// DOGE/ADA) dio 12 señales con checklist completo + R:R≥2; el valor con más
+// señales fue 10, empatado con 9 (3 cada uno) — se eligió 10 por el empate Y
+// porque coincide con la línea base de 1H (mismo valor ya usado en
+// DEFAULT_AUTO_TRADE_APEX_DAYS). Muestra chica (12 señales en 2 años, el
+// máximo histórico real de 15M en Bitunix) — igual que 1D, vale la pena
+// re-correr esta prueba si se junta más historial.
+const BACKTEST_APEX_DAYS_TARGET_BY_SCALE = { 1: 10, 4: 2, 24: 5, 0.25: 10 };
 const MIN_FAVORABLE_RR = 2;
 
 // Exportado solo para mostrarlo en la UI (app/backtest-historico/page.jsx) —

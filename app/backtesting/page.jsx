@@ -55,8 +55,12 @@ const STATUS_META = {
 // Qué scanner generó el hallazgo. Los registros creados antes de este cambio
 // no tienen `origen` (quedó null) y no se pueden reclasificar retroactivamente.
 const ORIGEN_META = {
-    'patrones':    { label: '4H', classes: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' },
-    'patrones-1h': { label: '1H', classes: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300' },
+    'patrones':         { label: '4H',   classes: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' },
+    'patrones-1h':      { label: '1H',   classes: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300' },
+    // Antes patrones-1h-full/page.jsx registraba sus hallazgos con
+    // origen: 'patrones-1h' (copiado sin actualizar de esa página) — se
+    // mezclaban con los de /patrones-1h bajo la misma etiqueta "1H".
+    'patrones-1h-full': { label: '1Hf',  classes: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-400' },
 }
 
 const STATUS_GROUPS = [
@@ -316,7 +320,11 @@ function BacktestCard({ record, onUpdated, leverageByCapital }) {
                     )}
                     {ORIGEN_META[record.origen] && (
                         <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${ORIGEN_META[record.origen].classes}`}
-                              title={record.origen === 'patrones' ? 'Detectado por /patrones (4H)' : 'Detectado por /patrones-1h (1H)'}>
+                              title={
+                                  record.origen === 'patrones' ? 'Detectado por /patrones (4H)'
+                                  : record.origen === 'patrones-1h' ? 'Detectado por /patrones-1h (1H)'
+                                  : 'Detectado por /patrones-1h-full (1H)'
+                              }>
                             {ORIGEN_META[record.origen].label}
                         </span>
                     )}
