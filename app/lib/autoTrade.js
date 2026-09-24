@@ -319,6 +319,25 @@ async function sendTradeOpenedEmail(payload) {
     }
 }
 
+// Scopes para los que sí se publica el tweet de apertura automática — pedido
+// explícito de excluir 'patrones-1h' (solo 'patrones' y 'patrones-1h-full').
+const TWEET_SCOPES = ['patrones', 'patrones-1h-full'];
+
+async function sendTradeOpenedTweet(payload) {
+    try {
+        const res  = await fetch('/api/twitter/trade-opened', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (!res.ok) console.error('[TradeOpenedTweet] Error:', json);
+        else         console.log('[TradeOpenedTweet] Publicado:', payload.symbol);
+    } catch (e) {
+        console.error('[TradeOpenedTweet] Excepción:', e);
+    }
+}
+
 // Contraparte de sendTradeOpenedEmail — antes, si tryAutoOpenPosition fallaba
 // por cualquier motivo, no quedaba ningún rastro visible fuera de la consola
 // del navegador (que nadie revisa), así que una señal podía nunca abrirse en
@@ -438,6 +457,19 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel, 
             leverage:     order.leverage,
             openedAt:     new Date().toISOString(),
         });
+
+        // Solo para los scopes pedidos ('patrones' y 'patrones-1h-full') —
+        // 'patrones-1h' queda excluido a propósito.
+        if (TWEET_SCOPES.includes(scope)) {
+            await sendTradeOpenedTweet({
+                symbol:      symbolPair,
+                direction:   isBull ? 'LONG' : 'SHORT',
+                entry:       levels.entry,
+                stopLoss:    levels.sl,
+                takeProfit:  levels.tp1,
+                leverage:    order.leverage,
+            });
+        }
 
         return { opened: true };
     } catch (e) {

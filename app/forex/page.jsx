@@ -416,7 +416,7 @@ export default function ForexBotPage() {
                     </div>
                     <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
                         <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Ganadas / Perdidas</div>
-                        <div className="text-xl font-semibold"><span className="text-green-600 dark:text-green-400">{wins}</span> / <span className="text-red-500 dark:text-red-400">{losses}</span></div>
+                        <div className="text-xl font-semibold"><span className="text-green-600 dark:text-green-400">{wins}</span> <span className='dark:text-slate-100'>/</span> <span className="text-red-500 dark:text-red-400">{losses}</span></div>
                     </div>
                     <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
                         <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Win rate</div>
