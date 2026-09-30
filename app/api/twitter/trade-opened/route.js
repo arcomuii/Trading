@@ -7,9 +7,9 @@ import path              from 'path';
 // Mismo copy de referidos en cada tweet — pedido explícito, no se arma
 // dinámico porque siempre es el mismo. El link en texto se reemplazó por el
 // QR (QR_CODE_PATH más abajo), adjunto como imagen del tweet.
-const REFERRAL_INTRO = '¿No sabes donde operar?';
-const REFERRAL_TEXT = 'Únete a #Bitunix y desbloquea más de 10,000 $USDT en recompensas para nuevos usuarios';
-const HASHTAGS = '#Trading #TradingCommunity #CryptoSignals #USDT #CryptoTrading #Crypto';
+const REFERRAL_INTRO = 'No sabes donde operar?';
+const REFERRAL_TEXT = 'Te invito';
+const HASHTAGS = '#Trading #CryptoSignals #USDT #CryptoTrading #Crypto';
 // process.cwd() es la raíz del proyecto tanto en `next dev` como en `next start`.
 const QR_CODE_PATH = path.join(process.cwd(), 'public', 'qr-code.png');
 
@@ -17,7 +17,7 @@ function fmtPrice(p) {
     if (p == null) return '—';
     const n = Number(p);
     return n < 1
-        ? `$${n.toFixed(5)}`
+        ? `$${n.toFixed(4)}`
         : `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -27,11 +27,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Contraparte "tweet" de trade-opened-email — se llama desde
 // tryAutoOpenPosition (ver app/lib/autoTrade.js) justo después de que
-// placeAutoOrder confirma la orden colocada en Bitunix, con los mismos datos
-// que ya se mandan por correo. `entry` es el precio LIMIT calculado por el
-// patrón (levels.entry), no el de ejecución real: la orden en sí sigue
-// colocándose a MERCADO (orderType: "MARKET" en placeAutoOrder) — eso no
-// cambia, el tweet solo informa el nivel de entrada del patrón.
+// placeAutoOrder confirma la orden colocada en Bitunix. `entry`, `stopLoss`,
+// `takeProfit` y `leverage` llegan ya como los valores REALES con los que
+// quedó la operación (precio de llenado real vía fetchRealEntryPrice, y
+// slStr/tp1Str — los mismos que se mandaron a Bitunix, redondeados a la
+// precisión del símbolo) — no los niveles teóricos del patrón, para que el
+// tweet coincida exactamente con lo que se abrió.
 export async function POST(request) {
     let symbol, direction, entry, stopLoss, takeProfit, leverage;
     try {

@@ -447,7 +447,7 @@ export function windowSize(scale = 4) {
 // backtestPatternEngine.js#simulateSymbolTrades (ver ese archivo para el
 // detalle completo de cada simplificación asumida). No calcula USDT aquí —
 // devuelve `pct` (movimiento fraccional) sin capital ni apalancamiento
-// aplicados; eso lo hace app/lib/forexCapital.js#applyVolumeCompounding una
+// aplicados; eso lo hace app/lib/forexCapital.js#applyFixedVolume una
 // vez que se juntaron las operativas de todos los símbolos.
 export function simulateSymbolTrades(candles, scale = 4) {
     const trades = [];

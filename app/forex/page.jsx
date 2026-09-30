@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 
-// ─── Panel del bot de trading REAL — Confluencia Forex ─────────────────────
+// ─── Panel del bot de trading REAL — Barrido NY Forex ──────────────────────
 // Pedido explícito del usuario: pestañas independientes por par, cuántas
 // operativas lleva cada uno, % ganadas/perdidas, P&L, estado de las
 // operativas abiertas, encendido/apagado por par, reporte semanal (viernes)
@@ -12,6 +12,14 @@ import { useEffect, useState } from 'react'
 // scripts/forex-bot.mjs, corriendo 24/7 como parte del mismo Servicio de
 // Windows que ya usa este proyecto (ver service-runner.js) — esta página no
 // necesita estar abierta para que el bot opere.
+//
+// Estrategia activa: Barrido de Liquidez NY 15m (reemplazó a Confluencia por
+// completo, pedido explícito) — ver app/lib/forexNySweepEngine.js, el mismo
+// motor ya verificado en app/backtesting-forex (48.0% de acierto sobre 221
+// operativas reales, 6 pares, 180 días, R:R≥2). El resumen de la estrategia
+// que se muestra abajo (h1/p) se arma a mano en este archivo, no se importa
+// del motor — si se vuelve a recalibrar el motor, hay que actualizar este
+// texto también para que no quede desactualizado.
 
 const PAIRS = ['EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'GBPJPY', 'USDCHF']
 const POLL_MS = 20_000
@@ -183,6 +191,7 @@ function BarChart({ data }) {
 export default function ForexBotPage() {
     const [data, setData] = useState(null)
     const [error, setError] = useState(null)
+    const [descOpen, setDescOpen] = useState(true) // descripción de la estrategia (h1/p) — colapsable, pedido explícito, abierta por defecto
     const [activeTab, setActiveTab] = useState(PAIRS[0])
     const [chartDays, setChartDays] = useState(30)
     const [toggling, setToggling] = useState(null)
@@ -192,6 +201,33 @@ export default function ForexBotPage() {
     const [orderSizeDraft, setOrderSizeDraft] = useState(null) // igual que maxPosDraft, pero para el volumen del par activo — se resetea al cambiar de pestaña (ver setTab)
     const [savingOrderSize, setSavingOrderSize] = useState(false)
     const [orderSizeSaved, setOrderSizeSaved] = useState(false)
+
+    // Historial REAL de posiciones (Capital.com, ver app/api/forex-bot/history/route.js)
+    // — distinto de state.trades (lo que el bot CREE que abrió/cerró): este
+    // viene directo de la cuenta, incluye operativas manuales, y no depende
+    // de que reconcile() haya reconocido bien cada una. Se carga a demanda
+    // (botón), NO en el poll de 20s de arriba — recorre un día a la vez
+    // contra Capital.com (límite real de su API) y con 30 días son ~30
+    // requests secuenciales, demasiado lento/pesado para repetir cada 20s.
+    const [history, setHistory] = useState(null)
+    const [historyLoading, setHistoryLoading] = useState(false)
+    const [historyError, setHistoryError] = useState(null)
+    const [historyDays, setHistoryDays] = useState(30)
+
+    const loadHistory = async (days = historyDays) => {
+        setHistoryLoading(true)
+        setHistoryError(null)
+        try {
+            const res = await fetch(`/api/forex-bot/history?days=${days}`, { cache: 'no-store' })
+            const json = await res.json()
+            if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
+            setHistory(json)
+        } catch (e) {
+            setHistoryError(e.message)
+        } finally {
+            setHistoryLoading(false)
+        }
+    }
 
     const load = async () => {
         try {
@@ -244,8 +280,12 @@ export default function ForexBotPage() {
     }
 
     const saveOrderSize = async () => {
-        const n = parseInt(orderSizeDraft, 10)
-        if (!Number.isInteger(n) || n < MIN_ORDER_SIZE || n > MAX_ORDER_SIZE) return
+        const parsed = parseInt(orderSizeDraft, 10)
+        if (!Number.isInteger(parsed) || parsed < MIN_ORDER_SIZE || parsed > MAX_ORDER_SIZE) return
+        // Múltiplos de 100: redondea al más cercano por si se tecleó un valor
+        // suelto en vez de usar las flechas del input (que ya suben/bajan de 100
+        // en 100 con step={100}).
+        const n = Math.round(parsed / 100) * 100
         setSavingOrderSize(true)
         try {
             const res = await fetch('/api/forex-bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: activeTab, orderSize: n }) })
@@ -286,12 +326,34 @@ export default function ForexBotPage() {
     return (
         <div className="p-6 space-y-6">
             <div>
-                <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">Forex · Bot de Confluencia (dinero real)</h1>
-                <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
-                    Analiza cada par de forma independiente (ver app/lib/forexConfluenceEngine.js) y abre operaciones REALES
-                    en Capital.com cuando encuentra un setup válido — corre 24/7 en scripts/forex-bot.mjs (Servicio de
-                    Windows), esta página solo muestra el estado y permite encender/apagar cada par.
-                </p>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">Forex · Bot de Barrido NY (dinero real)</h1>
+                    <button
+                        type="button"
+                        onClick={() => setDescOpen(o => !o)}
+                        className="text-[11px] font-semibold px-2 py-0.5 rounded-md text-gray-400 dark:text-slate-500 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+                        title={descOpen ? 'Ocultar descripción de la estrategia' : 'Mostrar descripción de la estrategia'}
+                    >
+                        {descOpen ? '▲ ocultar' : '▼ mostrar descripción'}
+                    </button>
+                </div>
+                {descOpen && (
+                    <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
+                        Marca el máximo/mínimo de la sesión Asia/Londres y de la pre-apertura (9:00-9:30 AM hora NY) de cada
+                        día; en la ventana operativa (9:30-11:00 AM NY) busca una vela de 15m que barra uno de esos niveles
+                        con salto de volumen (≥2.0× el promedio) y cierre con rechazo fuerte (cuerpo en la mitad del rango
+                        más alejada del nivel roto). Vende si barrió un máximo, compra si barrió un mínimo — SL 0.5×ATR
+                        detrás de la mecha, TP al nivel opuesto del rango del día o R:R 1:2 mínimo, cierre forzado a las
+                        12:00 PM NY si no tocó SL ni TP antes ("evitar sesión vespertina"). Verificado contra datos reales
+                        en <a href="/backtesting-forex" className="underline hover:text-indigo-500">/backtesting-forex</a>:
+                        48.0% de acierto sobre 221 operativas (6 pares, 180 días, R:R≥2) — ojo: esos parámetros se ajustaron
+                        contra el mismo dataset que se usó para medirlos, sin una porción de datos separada para confirmar
+                        que el resultado se sostiene, así que el rendimiento real hacia adelante podría ser distinto. Abre
+                        operaciones REALES en Capital.com (ver app/lib/forexNySweepEngine.js) — corre 24/7 en
+                        scripts/forex-bot.mjs (Servicio de Windows), esta página solo muestra el estado y permite
+                        encender/apagar cada par.
+                    </p>
+                )}
             </div>
 
             {/* ── Resumen de cuenta real ── */}
@@ -393,10 +455,10 @@ export default function ForexBotPage() {
                         Volumen por operación nueva ({activeTab}):
                     </span>
                     <input
-                        type="number" min={MIN_ORDER_SIZE} max={MAX_ORDER_SIZE} step={1}
+                        type="number" min={MIN_ORDER_SIZE} max={MAX_ORDER_SIZE} step={100}
                         value={orderSizeDraft ?? state.pairs[activeTab]?.orderSize ?? MIN_ORDER_SIZE}
                         onChange={e => setOrderSizeDraft(e.target.value)}
-                        title={`Unidades de la divisa base con las que se abre cada operativa NUEVA de ${activeTab} — mínimo ${MIN_ORDER_SIZE} (minDealSize de Capital.com). No afecta operativas ya abiertas.`}
+                        title={`Unidades de la divisa base con las que se abre cada operativa NUEVA de ${activeTab} — mínimo ${MIN_ORDER_SIZE} (minDealSize de Capital.com), en múltiplos de 100. No afecta operativas ya abiertas.`}
                         className="w-24 px-1.5 py-1 rounded-md border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-xs"
                     />
                     <button
@@ -524,6 +586,116 @@ export default function ForexBotPage() {
 
                 {activeOpen.length === 0 && activeTrades.length === 0 && (
                     <p className="text-sm text-gray-400 dark:text-slate-500">Todavía no hay operativas para este par.</p>
+                )}
+            </div>
+
+            {/* ── Historial REAL de posiciones (Capital.com) — todos los pares, incluye
+                operativas manuales, no depende del tracking interno del bot ── */}
+            <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4">
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+                    <h2 className="text-sm font-semibold text-gray-700 dark:text-slate-200">Historial real de posiciones (Capital.com)</h2>
+                    <div className="flex items-center gap-2">
+                        <select
+                            value={historyDays}
+                            onChange={e => setHistoryDays(Number(e.target.value))}
+                            disabled={historyLoading}
+                            className="text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-700 dark:text-slate-200 disabled:opacity-60"
+                        >
+                            <option value={7}>7 días</option>
+                            <option value={30}>30 días</option>
+                            <option value={90}>90 días</option>
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => loadHistory(historyDays)}
+                            disabled={historyLoading}
+                            className="text-[11px] font-semibold px-3 py-1.5 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-200 disabled:opacity-50"
+                        >
+                            {historyLoading ? 'Cargando…' : history ? '↻ Recargar' : 'Cargar historial'}
+                        </button>
+                    </div>
+                </div>
+                <p className="text-[10px] text-gray-400 dark:text-slate-500 mb-3">
+                    Directo de la cuenta real de Capital.com (incluye operativas manuales, no solo del bot) — a diferencia
+                    del historial de arriba (que es lo que el bot CREE que hizo), esto no se pierde si el bot falla en
+                    reconocer una posición como propia. Revisa un día calendario a la vez (límite real de la API), así
+                    que tarda unos segundos y no se recarga sola — pídelo cuando lo necesites.
+                </p>
+                {historyError && <p className="text-xs text-red-500 mb-2">Error: {historyError}</p>}
+                {!history && !historyLoading && !historyError && (
+                    <p className="text-sm text-gray-400 dark:text-slate-500">Sin cargar todavía.</p>
+                )}
+                {history && (
+                    <>
+                        <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500 dark:text-slate-400 mb-3">
+                            <span>{history.summary.total} posición(es) en {history.days} días</span>
+                            <span className="text-green-600 dark:text-green-400">{history.summary.wins} ganadora(s)</span>
+                            <span className="text-red-500 dark:text-red-400">{history.summary.losses} perdedora(s)</span>
+                            {history.summary.closed > 0 && (
+                                <span>Win rate: {((history.summary.wins / history.summary.closed) * 100).toFixed(1)}%</span>
+                            )}
+                            <span className={`font-semibold ${history.summary.totalPnlUsd >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                                P&L total: {fmtMoney(history.summary.totalPnlUsd)}
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-gray-400 dark:text-slate-500 -mt-2 mb-3">
+                            Todo convertido a USD. Para EURUSD/GBPUSD/AUDUSD es exacto (la cotización ya es USD); para
+                            USDJPY/USDCHF también es exacto (se usa el precio de salida de cada operación, que YA es la
+                            tasa de ese momento); para pares sin USD en ningún lado (ej. GBPJPY) es una APROXIMACIÓN con
+                            la tasa actual, no la de cuando cerró cada operación.
+                            {history.summary.missingUsd && <span className="text-amber-500"> Aviso: al menos una operativa no se pudo convertir (falló al pedir la tasa) y no entra en el total.</span>}
+                        </p>
+                        {history.positions.length === 0 ? (
+                            <p className="text-sm text-gray-400 dark:text-slate-500">Sin posiciones en este rango.</p>
+                        ) : (
+                            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                                <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white dark:bg-slate-800">
+                                        <tr className="text-left text-gray-400 dark:text-slate-500 border-b border-gray-100 dark:border-slate-700">
+                                            <th className="py-1 pr-3">Par</th>
+                                            <th className="py-1 pr-3">Dirección</th>
+                                            <th className="py-1 pr-3">Volumen</th>
+                                            <th className="py-1 pr-3">Entrada</th>
+                                            <th className="py-1 pr-3">Salida</th>
+                                            <th className="py-1 pr-3">Apertura</th>
+                                            <th className="py-1 pr-3">Cierre</th>
+                                            <th className="py-1 pr-3">Cerrada por</th>
+                                            <th className="py-1 pr-3">Resultado</th>
+                                            <th className="py-1 pr-3">P&L</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {history.positions.map(p => (
+                                            <tr key={p.dealId} className="border-b border-gray-50 dark:border-slate-800/60">
+                                                <td className="py-1 pr-3 font-semibold text-gray-700 dark:text-slate-200">{p.epic}</td>
+                                                <td className="py-1 pr-3">
+                                                    <span className={p.isBull ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'}>{p.isBull ? 'LONG' : 'SHORT'}</span>
+                                                </td>
+                                                <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.size ?? '—'}</td>
+                                                <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{fmtPrice(p.entry)}</td>
+                                                <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{fmtPrice(p.exit)}</td>
+                                                <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(p.openedAt)}</td>
+                                                <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.closedAt ? fmtDate(p.closedAt) : '—'}</td>
+                                                <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.closedBy ?? '—'}</td>
+                                                <td className="py-1 pr-3">
+                                                    {p.outcome == null ? (
+                                                        <span className="px-2 py-0.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">Abierta</span>
+                                                    ) : (
+                                                        <span className={`px-2 py-0.5 rounded-full font-medium ${p.outcome === 'win' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400'}`}>
+                                                            {p.outcome === 'win' ? 'Ganadora' : 'Perdedora'}
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td className={`py-1 pr-3 font-medium ${p.pnlUsd == null ? 'text-gray-400 dark:text-slate-500' : p.pnlUsd >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                                                    {fmtMoney(p.pnlUsd)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
 

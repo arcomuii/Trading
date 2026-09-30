@@ -15,5 +15,5 @@ export const INTERVAL_SCALE = { '1h': 1, '4h': 4, '1d': 24 }
 // (alcista/bajista) para ubicar Order Blocks.
 export async function fetchHistoricalCandles(epic, startMs, endMs, interval = '4h', { onBatch } = {}) {
     const rows = await fetchKlinesRange(epic, interval, startMs, endMs, { onBatch })
-    return rows.map(r => ({ openTime: r.openTime, open: r.open, high: r.high, low: r.low, close: r.close }))
+    return rows.map(r => ({ openTime: r.openTime, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }))
 }

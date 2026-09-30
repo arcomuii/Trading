@@ -4,7 +4,8 @@ import { fetchHistoricalCandles } from '../lib/capitalHistory'
 import { fetchMarketDetails } from '../lib/capitalMarket'
 import { simulateSymbolTrades, PATTERN_META, windowSize } from '../lib/forexPatternEngine'
 import { findConfluenceTrades, CONFLUENCE_META, MIN_M5_CANDLES, MIN_HTF_CANDLES, PAIR_PRESETS } from '../lib/forexConfluenceEngine'
-import { applyVolumeCompounding } from '../lib/forexCapital'
+import { findNySweepTrades, NY_SWEEP_META, MIN_NY_SWEEP_CANDLES } from '../lib/forexNySweepEngine'
+import { applyFixedVolume } from '../lib/forexCapital'
 import { CandlestickChart } from '../../components/CandlestickChart'
 
 // Backtest histórico de FOREX — pedido explícito del usuario: volver a la
@@ -39,7 +40,7 @@ import { CandlestickChart } from '../../components/CandlestickChart'
 // Lo que SÍ sigue siendo exclusivo de esta página (no se tocó): la fuente de
 // datos (Capital.com, no Bitunix — ver app/lib/capitalHistory.js/
 // capitalMarket.js) y el modelo de capital/margen real por par
-// (app/lib/forexCapital.js#applyVolumeCompounding, que reemplaza al
+// (app/lib/forexCapital.js#applyFixedVolume, que reemplaza al
 // `applyCapitalCompounding` de apalancamiento fijo que usa backtest-historico).
 //
 // Corre enteramente en el navegador — puede tardar si se combina un rango
@@ -56,16 +57,17 @@ const LOOKBACK_BUFFER_DAYS = 10 // margen para que ya haya ventana completa (200
 // `scale` (1/4/24) para los que ese motor está calibrado.
 const INTERVAL_OPTIONS = [
     { value: '5m', label: '5m' },
+    { value: '15m', label: '15m (Barrido NY)' },
     { value: '1h', label: '1H' },
     { value: '4h', label: '4H' },
     { value: '1d', label: '1D' },
 ]
-const INTERVAL_SCALE = { '1h': 1, '4h': 4, '1d': 24 } // cuántas velas de 1H cubre una vela de este intervalo — mismo criterio que bitunixHistory.js (no aplica a "5m", que usa su propio motor de Confluencia)
-const INTERVAL_MS = { '5m': 5 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000, '1d': 24 * 60 * 60_000 }
+const INTERVAL_SCALE = { '1h': 1, '4h': 4, '1d': 24 } // cuántas velas de 1H cubre una vela de este intervalo — mismo criterio que bitunixHistory.js (no aplica a "5m"/"15m", que usan sus propios motores)
+const INTERVAL_MS = { '5m': 5 * 60_000, '15m': 15 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000, '1d': 24 * 60 * 60_000 }
 const HTF_INTERVAL = '4h' // temporalidad mayor fija para el sesgo del motor de Confluencia — pedido explícito ("EMA de 50 en H1 o H4"), se eligió H4 por mayor selectividad
 const HTF_CANDLE_MS = INTERVAL_MS[HTF_INTERVAL]
 const CHART_CONTEXT_CANDLES = 40 // velas de margen antes de la entrada y después de la salida, para ver el contexto
-const ALL_TRADE_META = { ...PATTERN_META, ...CONFLUENCE_META } // para poder mostrar el tipo de operativa venga del motor que venga
+const ALL_TRADE_META = { ...PATTERN_META, ...CONFLUENCE_META, ...NY_SWEEP_META } // para poder mostrar el tipo de operativa venga del motor que venga
 
 // Rangos largos (2/3/5 años) agregados tras recalibrar para forex: con esta
 // estrategia, en 1D las señales que sí pasan el checklist completo + R:R≥2
@@ -139,9 +141,10 @@ export default function BacktestingForexPage() {
     const [candleInterval, setCandleInterval] = useState('1d') // 1D es donde esta estrategia sí encuentra señales en forex real (ver comentario arriba)
     const [rangeValue, setRangeValue] = useState(DEFAULT_RANGE)
     const [initialTotalCapital, setInitialTotalCapital] = useState(100)
-    const [capitalPercent, setCapitalPercent] = useState(10) // % del capital total por operación — pedido explícito
+    const [tradeVolume, setTradeVolume] = useState(100) // volumen fijo por operación, en unidades — tal cual se captura en Capital.com, múltiplos de 100 (minDealSize/minSizeIncrement real)
 
     const isConfluence = candleInterval === '5m'
+    const isNySweep = candleInterval === '15m'
 
     // Modo Confluencia (5m): una PESTAÑA por par (pedido explícito) — cada
     // una con su propia calibración (ver PAIR_PRESETS en
@@ -241,7 +244,11 @@ export default function BacktestingForexPage() {
         setConfluenceRunning(false)
     }
 
-    const runPatternBacktest = async () => {
+    // Corre para VARIOS pares a la vez (textarea de símbolos) — a diferencia
+    // del modo Confluencia (una pestaña por par), tanto el motor de Patrones
+    // (1H/4H/1D) como el de Barrido NY (15m) usan parámetros genéricos, sin
+    // calibración específica por par, así que comparten este mismo flujo.
+    const runMultiPairBacktest = async () => {
         const symbols = parseSymbols(symbolsText)
         if (symbols.length === 0) return
 
@@ -263,23 +270,40 @@ export default function BacktestingForexPage() {
             setProgress({ done: idx, total: symbols.length, current: symbol })
 
             try {
-                const minCandlesNeeded = windowSize(scale) + 10 // WINDOW (escalado ÷scale, ver forexPatternEngine.js) + margen
-                const [candles, market] = await Promise.all([
-                    fetchHistoricalCandles(symbol, fetchStartMs, endMs, candleInterval),
-                    fetchMarketDetails(symbol),
-                ])
+                if (isNySweep) {
+                    const [candles, market] = await Promise.all([
+                        fetchHistoricalCandles(symbol, fetchStartMs, endMs, '15m'),
+                        fetchMarketDetails(symbol),
+                    ])
 
-                if (candles.length < minCandlesNeeded) {
-                    setSymbolStatus(s => ({ ...s, [symbol]: `sin historial suficiente (${candles.length} velas)` }))
-                } else if (!Number.isFinite(market.marginFactor)) {
-                    setSymbolStatus(s => ({ ...s, [symbol]: 'sin marginFactor en Capital.com para este epic' }))
+                    if (candles.length < MIN_NY_SWEEP_CANDLES) {
+                        setSymbolStatus(s => ({ ...s, [symbol]: `sin historial suficiente (${candles.length} velas)` }))
+                    } else if (!Number.isFinite(market.marginFactor)) {
+                        setSymbolStatus(s => ({ ...s, [symbol]: 'sin marginFactor en Capital.com para este epic' }))
+                    } else {
+                        const symbolTrades = findNySweepTrades(candles).map(t => ({ ...t, symbol, marginFactor: market.marginFactor }))
+                        setRawTrades(prev => [...prev, ...symbolTrades])
+                        setSymbolStatus(s => ({ ...s, [symbol]: `${symbolTrades.length} operativa(s) · margen ${(market.marginFactor * 100).toFixed(2)}%` }))
+                    }
                 } else {
-                    // marginFactor de CADA par (varía por instrumento — ver
-                    // app/lib/forexCapital.js) va pegado a cada operativa para que
-                    // el margen se calcule con el valor real de ese par.
-                    const symbolTrades = simulateSymbolTrades(candles, scale).map(t => ({ ...t, symbol, marginFactor: market.marginFactor }))
-                    setRawTrades(prev => [...prev, ...symbolTrades])
-                    setSymbolStatus(s => ({ ...s, [symbol]: `${symbolTrades.length} operativa(s) · margen ${(market.marginFactor * 100).toFixed(2)}%` }))
+                    const minCandlesNeeded = windowSize(scale) + 10 // WINDOW (escalado ÷scale, ver forexPatternEngine.js) + margen
+                    const [candles, market] = await Promise.all([
+                        fetchHistoricalCandles(symbol, fetchStartMs, endMs, candleInterval),
+                        fetchMarketDetails(symbol),
+                    ])
+
+                    if (candles.length < minCandlesNeeded) {
+                        setSymbolStatus(s => ({ ...s, [symbol]: `sin historial suficiente (${candles.length} velas)` }))
+                    } else if (!Number.isFinite(market.marginFactor)) {
+                        setSymbolStatus(s => ({ ...s, [symbol]: 'sin marginFactor en Capital.com para este epic' }))
+                    } else {
+                        // marginFactor de CADA par (varía por instrumento — ver
+                        // app/lib/forexCapital.js) va pegado a cada operativa para que
+                        // el margen se calcule con el valor real de ese par.
+                        const symbolTrades = simulateSymbolTrades(candles, scale).map(t => ({ ...t, symbol, marginFactor: market.marginFactor }))
+                        setRawTrades(prev => [...prev, ...symbolTrades])
+                        setSymbolStatus(s => ({ ...s, [symbol]: `${symbolTrades.length} operativa(s) · margen ${(market.marginFactor * 100).toFixed(2)}%` }))
+                    }
                 }
             } catch (err) {
                 // Pares que marcan error se quitan solos de la lista — normalmente
@@ -295,7 +319,7 @@ export default function BacktestingForexPage() {
         setRunning(false)
     }
 
-    const runBacktest = isConfluence ? runConfluenceBacktest : runPatternBacktest
+    const runBacktest = isConfluence ? runConfluenceBacktest : runMultiPairBacktest
     const stopBacktest = () => { stopRef.current = true }
     const isRunning = isConfluence ? confluenceRunning : running
 
@@ -307,8 +331,8 @@ export default function BacktestingForexPage() {
         : symbolStatus
 
     const { trades, finalCapital, availableCapital, maxConcurrentOpen } = useMemo(
-        () => applyVolumeCompounding(effectiveRawTrades, { initialTotalCapital, capitalPercent }),
-        [effectiveRawTrades, initialTotalCapital, capitalPercent]
+        () => applyFixedVolume(effectiveRawTrades, { initialTotalCapital, tradeVolume }),
+        [effectiveRawTrades, initialTotalCapital, tradeVolume]
     )
 
     const executed = trades.filter(t => t.executed)
@@ -394,16 +418,27 @@ export default function BacktestingForexPage() {
         <div className="p-6 space-y-6">
             <div>
                 <h1 className="text-xl font-semibold text-gray-800 dark:text-slate-100">
-                    Backtest histórico Forex · {isConfluence ? `Confluencia ${activeTab}` : 'Estrategia de Patrones'} ({RANGE_OPTIONS.find(r => r.value === rangeValue)?.label} · {candleInterval.toUpperCase()})
+                    Backtest histórico Forex · {isConfluence ? `Confluencia ${activeTab}` : isNySweep ? 'Barrido NY 15m (Apertura NY)' : 'Estrategia de Patrones'} ({RANGE_OPTIONS.find(r => r.value === rangeValue)?.label} · {candleInterval.toUpperCase()})
                 </h1>
                 {isConfluence ? (
                     <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
                         HTF EMA50 en H4 + barrido/OB + divergencia RSI, R:R mínimo 2:1 dinámico (siguiente liquidez
                         estructural), sin Break Even. Cada pestaña ({PAIRS.join(', ')}) tiene su propia calibración
                         (ver "Estado por par" abajo) para caer en 45-55% de acierto y 3-10 operativas/mes con datos
-                        reales de Capital.com. Capital total inicial ${initialTotalCapital}, cada operación compromete
-                        el <b>{capitalPercent}% del capital total</b> en ese momento — el volumen real que hay que
-                        operar en Capital.com se deriva con el <code className="text-xs">marginFactor</code> real de este par.
+                        reales de Capital.com. Capital total inicial ${initialTotalCapital}, cada operación opera un
+                        volumen fijo de <b>{tradeVolume} unidades</b> (igual que se captura en Capital.com) — el margen
+                        real que eso compromete se deriva con el <code className="text-xs">marginFactor</code> real de este par.
+                    </p>
+                ) : isNySweep ? (
+                    <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
+                        Marca el máximo/mínimo de la sesión Asia/Londres y de la pre-apertura (9:00-9:30 AM hora NY) de
+                        cada día; en la ventana operativa (9:30-11:00 AM NY) busca una vela de 15m que barra uno de esos
+                        niveles con salto de volumen y cierre de vuelta del otro lado (rechazo). Vende si barrió un
+                        máximo, compra si barrió un mínimo — SL 0.5×ATR detrás de la mecha, TP al nivel opuesto
+                        del rango del día o R:R 1:2 mínimo. Cierre forzado a las 12:00 PM NY si no tocó SL ni TP antes.
+                        Todas las horas son hora de Nueva York (EST/EDT). Capital total inicial ${initialTotalCapital}, cada
+                        operación opera un volumen fijo de <b>{tradeVolume} unidades</b> (igual que se captura en
+                        Capital.com) — el margen real que eso compromete se deriva con el <code className="text-xs">marginFactor</code> real de cada par.
                     </p>
                 ) : (
                     <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
@@ -411,8 +446,8 @@ export default function BacktestingForexPage() {
                         cuñas, banderas/banderines y taza-asa sobre una ventana deslizante), con el mismo checklist de entrada,
                         ápice exactamente al target de esta escala y R:R mínimo 2:1 contra TP2. Barrido de liquidez como
                         condición adicional del checklist. Capital total inicial ${initialTotalCapital}, cada operación
-                        compromete el <b>{capitalPercent}% del capital total</b> en ese momento — el volumen real que hay
-                        que operar en Capital.com se deriva con el <code className="text-xs">marginFactor</code> real de cada par.
+                        opera un volumen fijo de <b>{tradeVolume} unidades</b> (igual que se captura en Capital.com) —
+                        el margen real que eso compromete se deriva con el <code className="text-xs">marginFactor</code> real de cada par.
                     </p>
                 )}
             </div>
@@ -440,6 +475,8 @@ export default function BacktestingForexPage() {
                     <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1">
                         {candleInterval === '5m'
                             ? 'Motor de Confluencia (HTF EMA50 en H4 + barrido/OB + divergencia RSI) — una pestaña por par, cada una calibrada por separado. Descarga M5 + H4.'
+                            : candleInterval === '15m'
+                            ? 'Motor de Barrido NY (liquidez de máximos/mínimos previos en la apertura de NY, 9:30-11:00 AM hora NY) — ver app/lib/forexNySweepEngine.js. Varios pares a la vez, igual que el motor de Patrones.'
                             : '1H/4H/1D: motor de patrones (triángulos, cuñas, banderas, taza-asa) — ventanas de detección calibradas y validadas empíricamente solo para estas tres escalas (ver app/lib/forexPatternEngine.js).'}
                     </p>
                 </div>
@@ -531,20 +568,26 @@ export default function BacktestingForexPage() {
                         />
                     </label>
                     <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
-                        Capital por operación (% del total)
+                        Volumen por operación (unidades)
                         <input
-                            type="number" min={0.1} step={0.5}
-                            value={capitalPercent}
-                            onChange={e => setCapitalPercent(parseFloat(e.target.value) || 0)}
+                            type="number" min={100} step={100}
+                            value={tradeVolume}
+                            onChange={e => {
+                                const raw = parseFloat(e.target.value) || 0
+                                // Múltiplos de 100 — mismo minDealSize/minSizeIncrement real de Capital.com
+                                // (ver app/lib/capitalMarket.js#fetchMarketDetails) para los 6 pares de esta página.
+                                const snapped = Math.max(100, Math.round(raw / 100) * 100)
+                                setTradeVolume(snapped)
+                            }}
                             disabled={isRunning}
                             className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-800 dark:text-white text-sm disabled:opacity-60"
                         />
                     </label>
                 </div>
                 <p className="text-[10px] text-gray-400 dark:text-slate-500 -mt-1">
-                    Cada operación compromete ese % del capital TOTAL en el momento de abrirse (mismo método que Capital.com:
-                    el margen se fija primero y el volumen real se deriva con el marginFactor de cada par) — compounding
-                    natural: si el capital sube, el % de la siguiente operación es un monto mayor en dólares; si baja, menor.
+                    Volumen fijo en unidades, igual que se captura al abrir una posición en Capital.com (múltiplos de 100).
+                    El margen que compromete cada operación se deriva de ese volumen con el marginFactor real de cada par —
+                    a diferencia de un % del capital, este volumen NO escala solo si el capital sube o baja.
                 </p>
 
                 <div className="flex items-center gap-4 flex-wrap pt-1">

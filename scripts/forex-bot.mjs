@@ -1,7 +1,32 @@
-// ─── Bot de trading real — Confluencia Forex (EUR/USD y los otros 5 pares) ──
-// Pedido explícito del usuario: analiza cada par de forma independiente y,
-// en cuanto encuentra un setup válido, abre la operación REAL en Capital.com
+// ─── Bot de trading real — Barrido NY Forex (EUR/USD y los otros 5 pares) ───
+// Pedido explícito del usuario: reemplaza por completo la estrategia de
+// Confluencia que corría acá antes por el motor de Barrido de Liquidez NY
+// (ver app/lib/forexNySweepEngine.js — mismo motor ya verificado en
+// app/backtesting-forex: 48.0% de acierto sobre 221 operativas reales,
+// 6 pares, 180 días, R:R≥2). Analiza cada par de forma independiente y, en
+// cuanto encuentra un setup válido, abre la operación REAL en Capital.com
 // (cuenta LIVE, dinero real — no hay demo configurada en este proyecto).
+//
+// ADVERTENCIA sobre el 48.0%: se llegó a esos parámetros (rechazo≥50% del
+// rango de la vela, salto de volumen≥2.0×) probando varias combinaciones
+// CONTRA EL MISMO dataset que se usó para medirlas — sin una porción de
+// datos separada, nunca vista durante el ajuste, para confirmar que el
+// resultado se sostiene. El rendimiento real hacia adelante podría ser
+// distinto. Pedido explícito del usuario: arrancar en vivo con dinero real
+// de todos modos, sin período de prueba en DRY_RUN — queda documentado acá
+// para que quede claro que fue una decisión informada, no un descuido.
+//
+// A diferencia de Confluencia (M5, todo el día, sin cierre por horario), esta
+// estrategia opera SOLO en velas de 15m dentro de una ventana horaria de
+// Nueva York (9:30-11:00 AM NY para entradas) y exige cerrar cualquier
+// posición todavía abierta a las 12:00 PM NY ("evitar sesión vespertina") —
+// ver closePosition()/el chequeo de cierre forzado más abajo. Ese cierre
+// forzado usa un endpoint (DELETE /api/v1/positions/{dealId}) que NUNCA se
+// había ejercitado contra la API real de Capital.com en este proyecto (a
+// diferencia de abrir posiciones, que sí se probó hoy) — si falla, la
+// posición sigue corriendo protegida por su SL/TP normal (nunca queda sin
+// protección), solo se pasa de la ventana horaria pensada; se reintenta cada
+// ciclo hasta que cierre por SL/TP o el cierre forzado logre completarse.
 //
 // Corre pegándole al PROXY de Next.js (http://localhost:3001/api/capital/...
 // — mismo patrón que scripts/backtest-monitor.js contra /api/bitunix/...) en
@@ -45,13 +70,12 @@
 //     operativas (las que ya están abiertas siguen su curso normal hasta
 //     cerrar) — para no seguir arriesgando una cuenta que ya perdió la
 //     mitad. Se reactiva solo, si el balance se recupera arriba del 50%.
-import { findLiveSetups, PAIR_PRESETS } from '../app/lib/forexConfluenceEngine.js'
+import { findLiveNySweepSetup, nyHourFraction, nyDateStr, FORCED_CLOSE_HOUR, MIN_NY_SWEEP_CANDLES } from '../app/lib/forexNySweepEngine.js'
 import { readState, updateState, pushLog, PAIRS, DEFAULT_MAX_CONCURRENT_POSITIONS, DEFAULT_ORDER_SIZE } from '../app/lib/forexBotState.js'
 
 const BASE_URL = `http://localhost:${process.env.TRADING_DEV_PORT || '3001'}`
 const FETCH_TIMEOUT_MS = 40_000 // mismo margen que route.js contra la API real de Capital.com
-const CYCLE_MS = 5 * 60_000 // alineado a M5 — no tiene sentido revisar más seguido, las velas nuevas tardan 5 min en cerrar
-const HTF_INTERVAL_MS = 4 * 3_600_000 // H4
+const CYCLE_MS = 5 * 60_000 // el bot sigue revisando cada 5 min aunque las velas ahora sean de 15m — así detecta una señal fresca (o el corte de las 12:00 PM NY) sin esperar hasta el cierre exacto de cada vela de 15m
 
 // El volumen por operación (antes ORDER_SIZE, fijo en 100 para los 6 pares)
 // ahora es configurable POR PAR desde /forex — pedido explícito del usuario —
@@ -61,13 +85,11 @@ const HTF_INTERVAL_MS = 4 * 3_600_000 // H4
 const STALE_ORDER_HOURS = 10       // red de seguridad para una orden que quedó pendiente sin resolverse (ya no debería pasar con órdenes a mercado, que se resuelven en el mismo ciclo) — mismo criterio que CHOCH_TO_FILL_CANDLES del backtest
 const CIRCUIT_BREAKER_RATIO = 0.5  // detiene aperturas nuevas si el balance cae debajo de esta fracción del balance inicial observado
 
-// Cada par necesita M5 hacia atrás por lo menos `liquidityLookbackDays` (el
-// más largo de los 6 presets, 60 días) + margen para el swingLookback/ATR/RSI
-// — se pide con margen de sobra (75 días) para no quedar corto justo en el
-// borde. H4 solo necesita cubrir el EMA50 (200h ≈ 8.3 días) — se pide con
-// margen amplio (45 días) porque es una descarga barata (pocas velas).
-const M5_LOOKBACK_DAYS = 75
-const H4_LOOKBACK_DAYS = 45
+// Velas de 15m hacia atrás — MIN_NY_SWEEP_CANDLES (ATR14+volumen20+margen)
+// son apenas ~14h, pero se pide de sobra (10 días) para que el promedio de
+// volumen y el ATR nunca queden cortos, con margen para el fin de semana sin
+// velas nuevas.
+const M15_LOOKBACK_DAYS = 10
 
 function log(level, message) {
     const line = `[forex-bot] ${new Date().toISOString()} ${message}`
@@ -96,7 +118,7 @@ function midPrice(p) {
     return Number.isFinite(bid) ? bid : Number.isFinite(ask) ? ask : null
 }
 
-// Una página de velas M5/H4 (mismo endpoint/límite real verificado hoy en
+// Una página de velas (mismo endpoint/límite real verificado hoy en
 // app/lib/capitalMarket.js: epic en el path, tope real 1000 velas/request).
 async function fetchKlines(epic, resolution, fromMs, toMs) {
     const params = new URLSearchParams({ resolution, max: '1000', from: toCapitalDateStr(fromMs), to: toCapitalDateStr(toMs) })
@@ -202,6 +224,27 @@ async function placeMarketOrder({ epic, direction, size, stopLevel, profitLevel 
 
 async function cancelWorkingOrder(dealId) {
     return apiFetch(`api/v1/workingorders/${dealId}`, { method: 'DELETE' })
+}
+
+// Cierra una posición YA abierta — usado para el corte de las 12:00 PM NY
+// ("evitar sesión vespertina") de la estrategia de Barrido NY. NO VERIFICADO
+// contra la API real de Capital.com todavía (a diferencia de placeMarketOrder,
+// que sí se probó hoy) — documentación pública: DELETE /api/v1/positions/
+// {dealId} con {direction, size, orderType} en el body, donde `direction` es
+// el MISMO lado con el que se abrió la posición (el dealId ya identifica cuál
+// cerrar; no es "abrir la contraria"). Si Capital.com interpretara esto
+// distinto y la orden fuera rechazada, la posición simplemente sigue abierta
+// protegida por su SL/TP normal — nunca queda sin protección, solo se pasa
+// del horario pensado (ver nota de cierre forzado en runCycle()).
+async function closePosition({ dealId, direction, size }) {
+    if (DRY_RUN) {
+        log('warn', `[DRY RUN] NO se cerró ninguna posición real — hubiera sido: cerrar ${dealId} (${direction} ${size})`)
+        return { dealReference: `dryrun-close-${Date.now()}` }
+    }
+    return apiFetch(`api/v1/positions/${dealId}`, {
+        method: 'DELETE',
+        body: { direction, size, orderType: 'MARKET' },
+    })
 }
 
 // Margen en USD que exige `size` unidades de la divisa BASE del par, al
@@ -329,27 +372,34 @@ async function reconcile(state, realPositions, realWorkingOrders) {
 }
 
 // ── Candelas: descarga completa una vez, incremental después (por par) ─────
-const candleCache = {} // { [symbol]: { m5: [...], h4: [...] } } — en memoria, se pierde si el proceso reinicia (se re-descarga solo)
+const M15_MS = 15 * 60_000
+const candleCache = {} // { [symbol]: { m15: [...] } } — en memoria, se pierde si el proceso reinicia (se re-descarga solo)
+
+// Solo velas YA CERRADAS (openTime + 15min ya pasó) — Capital.com puede
+// devolver la vela EN FORMACIÓN dentro del rango pedido, y evaluar una vela
+// que todavía se está formando como si fuera "la última cerrada" leería un
+// high/low/close que todavía puede cambiar (equivalente a repintar). Se
+// filtra acá, en el único lugar que arma el arreglo que ve el motor.
+function onlyClosed(candles, nowMs) {
+    return candles.filter(c => c.openTime + M15_MS <= nowMs)
+}
 
 async function refreshCandles(symbol) {
     const nowMs = Date.now()
     let entry = candleCache[symbol]
     if (!entry) {
-        const m5 = await fetchKlinesRange(symbol, 'MINUTE_5', nowMs - M5_LOOKBACK_DAYS * 86_400_000, nowMs, 3)
-        const h4 = await fetchKlinesRange(symbol, 'HOUR_4', nowMs - H4_LOOKBACK_DAYS * 86_400_000, nowMs, 150)
-        entry = { m5, h4 }
+        const m15 = await fetchKlinesRange(symbol, 'MINUTE_15', nowMs - M15_LOOKBACK_DAYS * 86_400_000, nowMs, 9)
+        entry = { m15 }
         candleCache[symbol] = entry
-        log('info', `${symbol}: histórico inicial descargado — M5=${m5.length} H4=${h4.length}`)
-        return entry
+        log('info', `${symbol}: histórico inicial descargado — M15=${m15.length}`)
+        return { m15: onlyClosed(m15, nowMs) }
     }
 
     // Incremental: solo lo nuevo desde la última vela conocida, más un
     // pequeño solape (2 velas) por si la última que teníamos no había
     // cerrado todavía cuando se pidió.
-    const lastM5 = entry.m5[entry.m5.length - 1]?.openTime ?? (nowMs - M5_LOOKBACK_DAYS * 86_400_000)
-    const lastH4 = entry.h4[entry.h4.length - 1]?.openTime ?? (nowMs - H4_LOOKBACK_DAYS * 86_400_000)
-    const newM5 = await fetchKlinesRange(symbol, 'MINUTE_5', lastM5 - 2 * 300_000, nowMs, 3)
-    const newH4 = await fetchKlinesRange(symbol, 'HOUR_4', lastH4 - 2 * HTF_INTERVAL_MS, nowMs, 150)
+    const lastM15 = entry.m15[entry.m15.length - 1]?.openTime ?? (nowMs - M15_LOOKBACK_DAYS * 86_400_000)
+    const newM15 = await fetchKlinesRange(symbol, 'MINUTE_15', lastM15 - 2 * M15_MS, nowMs, 9)
 
     const mergeByTime = (oldArr, newArr, maxAgeMs) => {
         const byTime = new Map(oldArr.map(c => [c.openTime, c]))
@@ -357,9 +407,34 @@ async function refreshCandles(symbol) {
         const cutoff = nowMs - maxAgeMs
         return [...byTime.values()].filter(c => c.openTime >= cutoff).sort((a, b) => a.openTime - b.openTime)
     }
-    entry.m5 = mergeByTime(entry.m5, newM5, M5_LOOKBACK_DAYS * 86_400_000)
-    entry.h4 = mergeByTime(entry.h4, newH4, H4_LOOKBACK_DAYS * 86_400_000)
-    return entry
+    entry.m15 = mergeByTime(entry.m15, newM15, M15_LOOKBACK_DAYS * 86_400_000)
+    return { m15: onlyClosed(entry.m15, nowMs) }
+}
+
+// { usedHigh, usedLow } para HOY (fecha calendario NY) y este par, derivado
+// del propio historial del bot — replica el límite "una sola operativa por
+// lado y por día" del backtest (ver findNySweepTrades#usedHigh/usedLow), que
+// findLiveNySweepSetup no puede saber por sí sola mirando solo la vela más
+// reciente (ver su comentario). Revisa las 3 colecciones porque una operativa
+// de hoy puede estar en cualquiera según en qué momento del ciclo esté:
+// recién colocada (pendingOrders), ya llena (openPositions), o ya cerrada
+// (trades) — cualquiera de las tres cuenta como "ya se usó este lado hoy".
+function sidesUsedToday(state, symbol) {
+    const today = nyDateStr(Date.now())
+    let usedHigh = false, usedLow = false
+    const consider = (entries, timeField) => {
+        for (const e of entries) {
+            if (e.symbol !== symbol) continue
+            const ts = new Date(e[timeField]).getTime()
+            if (!Number.isFinite(ts) || nyDateStr(ts) !== today) continue
+            if (e.isBull) usedLow = true // compra = se barrió un mínimo
+            else usedHigh = true          // venta = se barrió un máximo
+        }
+    }
+    consider(state.pendingOrders, 'placedAt')
+    consider(state.openPositions, 'openedAt')
+    consider(state.trades, 'openedAt')
+    return { usedHigh, usedLow }
 }
 
 // ── Un ciclo completo: reconciliar, y si hay cupo/capital, buscar señales ──
@@ -406,6 +481,29 @@ async function runCycle(circuitBreaker) {
         return s
     })
 
+    // ── Cierre forzado a las 12:00 PM NY ("evitar sesión vespertina") ──
+    // Corre SIEMPRE (incluso con el cupo lleno o el circuit breaker activo —
+    // cerrar posiciones nunca debería bloquearse por eso) contra CUALQUIER
+    // posición que el bot tenga registrada como abierta. Se reintenta cada
+    // ciclo (5 min) hasta que Capital.com confirme el cierre — si falla, la
+    // posición sigue protegida por su SL/TP normal (ver nota de
+    // closePosition() más arriba), no queda sin resguardo.
+    {
+        const stateForClose = await readState()
+        const nowHour = nyHourFraction(Date.now())
+        if (nowHour >= FORCED_CLOSE_HOUR) {
+            for (const op of stateForClose.openPositions) {
+                try {
+                    log('warn', `${op.symbol}: pasó la 12:00 PM NY con la posición todavía abierta — mandando cierre forzado.`)
+                    await closePosition({ dealId: op.dealId, direction: op.isBull ? 'BUY' : 'SELL', size: op.size })
+                    await updateState(s => { pushLog(s, 'warn', `${op.symbol}: cierre forzado (12:00 PM NY) enviado — se confirma en el próximo ciclo vía reconcile().`); return s })
+                } catch (e) {
+                    log('error', `${op.symbol}: falló el cierre forzado de las 12:00 PM NY (sigue protegida por su SL/TP) — ${e.message}`)
+                }
+            }
+        }
+    }
+
     // El cupo se cuenta contra la cuenta REAL completa (posiciones +
     // órdenes pendientes), no solo lo que el bot mismo abrió — hallazgo del
     // 2026-09-17: la cuenta ya tenía una posición manual abierta (EURUSD)
@@ -429,21 +527,24 @@ async function runCycle(circuitBreaker) {
         const orderSize = stateNow.pairs[symbol]?.orderSize ?? DEFAULT_ORDER_SIZE
 
         try {
-            const { m5, h4 } = await refreshCandles(symbol)
-            const params = PAIR_PRESETS[symbol]
-            const setups = findLiveSetups(m5, h4, HTF_INTERVAL_MS, params)
-            if (!setups.length) continue
+            const { m15 } = await refreshCandles(symbol)
+            if (m15.length < MIN_NY_SWEEP_CANDLES) continue // histórico inicial todavía descargándose
+            const latest = findLiveNySweepSetup(m15, sidesUsedToday(stateNow, symbol))
+            if (!latest) continue
 
-            const latest = setups[setups.length - 1]
+            // `lastActedChochTime` se reutiliza tal cual del bot de Confluencia
+            // (mismo campo de estado, para no requerir una migración de
+            // data/forex-bot-state.json) — acá guarda el `signalTime` (openTime
+            // de la vela de 15m que disparó la señal) en vez de un chochTime.
             const lastActed = stateNow.lastActedChochTime[symbol] ?? 0
-            if (latest.chochTime <= lastActed) continue // ya se atendió este mismo CHoCH antes
+            if (latest.signalTime <= lastActed) continue // ya se atendió esta misma vela antes
 
             // Setup demasiado viejo (el bot estuvo caído, o el ciclo se
-            // saltó varias velas) — no tiene sentido perseguir un giro de
+            // saltó varias velas) — no tiene sentido perseguir un barrido de
             // hace horas, se descarta sin abrir nada.
-            const ageHours = (Date.now() - latest.chochTime) / 3_600_000
+            const ageHours = (Date.now() - latest.signalTime) / 3_600_000
             if (ageHours > STALE_ORDER_HOURS) {
-                await updateState(s => { s.lastActedChochTime[symbol] = latest.chochTime; return s })
+                await updateState(s => { s.lastActedChochTime[symbol] = latest.signalTime; return s })
                 continue
             }
 
@@ -459,7 +560,7 @@ async function runCycle(circuitBreaker) {
             const acctNow = await getAccount()
             if (requiredMargin > acctNow.available) {
                 log('warn', `${symbol}: setup encontrado pero falta margen (necesita $${requiredMargin.toFixed(2)}, disponible $${acctNow.available.toFixed(2)}) — se omite.`)
-                await updateState(s => { s.lastActedChochTime[symbol] = latest.chochTime; return s })
+                await updateState(s => { s.lastActedChochTime[symbol] = latest.signalTime; return s })
                 continue
             }
 
@@ -474,7 +575,7 @@ async function runCycle(circuitBreaker) {
             const accepted = !DRY_RUN && (confirmation?.dealStatus === 'ACCEPTED' || confirmation == null) // sin confirmación clara, se asume aceptada y se reconcilia en el próximo ciclo
 
             await updateState(s => {
-                s.lastActedChochTime[symbol] = latest.chochTime // se marca atendido incluso en dry-run, para no repetir la misma señal cada ciclo de prueba
+                s.lastActedChochTime[symbol] = latest.signalTime // se marca atendido incluso en dry-run, para no repetir la misma señal cada ciclo de prueba
                 if (DRY_RUN) {
                     pushLog(s, 'info', `[DRY RUN] ${symbol}: señal detectada, orden NO enviada de verdad (${direction} ${orderSize} @ ${level}, SL ${stopLevel}, TP ${profitLevel})`)
                 } else if (accepted) {
@@ -488,7 +589,7 @@ async function runCycle(circuitBreaker) {
                         symbol, dealId: confirmation?.dealId ?? order.dealReference, dealReference: order.dealReference,
                         isBull: latest.isBull, entry: confirmation?.level ?? level, sl: stopLevel, tp: profitLevel, size: orderSize,
                         margin: requiredMargin,
-                        placedAt: new Date().toISOString(), chochTime: latest.chochTime,
+                        placedAt: new Date().toISOString(), chochTime: latest.signalTime,
                     })
                     pushLog(s, 'info', `${symbol}: orden a mercado real colocada (${direction} ${orderSize} ≈@ ${confirmation?.level ?? level}, SL ${stopLevel}, TP ${profitLevel})`)
                 } else {
@@ -506,7 +607,7 @@ async function runCycle(circuitBreaker) {
 }
 
 async function main() {
-    log('info', `Bot de Confluencia Forex iniciado — ciclo cada ${CYCLE_MS / 60_000} min, contra ${BASE_URL}`)
+    log('info', `Bot de Barrido NY Forex iniciado — ciclo cada ${CYCLE_MS / 60_000} min, contra ${BASE_URL} (ventana operativa 9:30-11:00 AM NY, cierre forzado 12:00 PM NY)`)
     const circuitBreaker = { initialBalance: null, wasTripped: false }
     // Primer ciclo inmediato, luego cada CYCLE_MS.
     const tick = async () => {

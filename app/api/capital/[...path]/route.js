@@ -72,7 +72,14 @@ async function forward(request, { path }) {
     const targetUrl   = `${CAPITAL_BASE}${targetPath}${url.search}`
 
     const method = request.method
-    const rawBody = (method === 'POST' || method === 'PUT') ? await request.text() : undefined
+    // DELETE necesita reenviar body también — Capital.com usa
+    // DELETE /api/v1/positions/{dealId} con {direction, size, orderType} para
+    // CERRAR una posición (ver closePosition() en scripts/forex-bot.mjs), no
+    // solo para cancelWorkingOrder() (que no manda body). Antes de este
+    // cambio, un DELETE con body llegaba a Capital.com sin body — habría
+    // fallado en silencio la primera vez que se necesitara cerrar una
+    // posición de verdad.
+    const rawBody = (method === 'POST' || method === 'PUT' || method === 'DELETE') ? await request.text() : undefined
 
     let sess
     try {
@@ -123,5 +130,11 @@ async function forward(request, { path }) {
     }
 }
 
-export async function GET(request, { params })  { return forward(request, params) }
-export async function POST(request, { params }) { return forward(request, params) }
+export async function GET(request, { params })    { return forward(request, params) }
+export async function POST(request, { params })   { return forward(request, params) }
+// Faltaba este export — sin él, Next.js devuelve 405 a CUALQUIER DELETE (ni
+// siquiera llega a forward()). cancelWorkingOrder() en scripts/forex-bot.mjs
+// ya llamaba DELETE antes de este cambio; como este handler no existía,
+// nunca pudo haber funcionado (ese camino, con órdenes a mercado, rara vez se
+// ejercita — quedó sin detectar hasta ahora).
+export async function DELETE(request, { params }) { return forward(request, params) }

@@ -71,8 +71,8 @@ export async function POST(request) {
 
     if (orderSize !== undefined) {
         const n = Number(orderSize)
-        if (!PAIRS.includes(symbol) || !Number.isInteger(n) || n < MIN_ORDER_SIZE || n > MAX_ORDER_SIZE) {
-            return NextResponse.json({ error: `orderSize debe ser un entero entre ${MIN_ORDER_SIZE} y ${MAX_ORDER_SIZE}, con un symbol válido` }, { status: 400 })
+        if (!PAIRS.includes(symbol) || !Number.isInteger(n) || n < MIN_ORDER_SIZE || n > MAX_ORDER_SIZE || n % 100 !== 0) {
+            return NextResponse.json({ error: `orderSize debe ser un entero múltiplo de 100 entre ${MIN_ORDER_SIZE} y ${MAX_ORDER_SIZE}, con un symbol válido` }, { status: 400 })
         }
         const state = await updateState(s => {
             s.pairs[symbol] = { ...(s.pairs[symbol] || {}), orderSize: n }

@@ -85,6 +85,12 @@ export async function fetchKlines(epic, resolution, { from, to, max = MAX_CANDLE
         high:  midPrice(r.highPrice),
         low:   midPrice(r.lowPrice),
         close: midPrice(r.closePrice),
+        // Proxy de volumen por ticks (Capital.com es un bróker OTC de forex,
+        // no hay volumen consolidado de un exchange real) — usado por
+        // app/lib/forexNySweepEngine.js para el filtro de "salto de volumen"
+        // del barrido. Puede faltar para algunos epics; se deja `null` en
+        // ese caso en vez de inventar un 0 que se leería como "sin volumen".
+        volume: Number.isFinite(r.lastTradedVolume) ? r.lastTradedVolume : null,
     })).filter(c => Number.isFinite(c.openTime) && c.close != null)
         .sort((a, b) => a.openTime - b.openTime)
 }

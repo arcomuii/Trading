@@ -8,7 +8,7 @@ import { mirrorToRemote } from './remoteStore';
 
 export const DISPLAY_APEX_DAYS     = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // qué se muestra en los resultados de las páginas de patrones
 export const BACKTEST_APEX_DAYS    = [10]; // registro en el log de backtesting
-export const AUTO_MAX_LEVERAGE     = 20; // tope al que se escala si Bitunix rechaza la orden (no configurable)
+export const AUTO_MAX_LEVERAGE     = 50; // tope al que se escala si Bitunix rechaza la orden (no configurable)
 export const DEFAULT_TRADE_AMOUNT_USDT = 20;
 export const DEFAULT_AUTO_TRADE_APEX_DAYS = 10; // mismo valor que el TARGET_APEX_DAYS fijo anterior
 export const MIN_AUTO_TRADE_APEX_DAYS = 1;
@@ -211,6 +211,34 @@ async function fetchOpenPositions() {
     if (Array.isArray(d?.list))         return d.list;
     if (Array.isArray(d))               return d;
     return [];
+}
+
+// Mismo criterio defensivo que `pick()` en app/bitunix/page.jsx — Bitunix no
+// es consistente entre endpoints sobre cómo llama al precio promedio de
+// apertura de una posición.
+function pick(obj, ...keys) {
+    for (const k of keys) {
+        const v = obj?.[k];
+        if (v !== undefined && v !== null && v !== '' && v !== '0') return v;
+    }
+    return null;
+}
+
+// Precio real de llenado de la orden MARKET recién colocada — se pide aparte
+// (no viene en la respuesta de place_order) para que el tweet reporte el
+// precio con el que la posición REALMENTE abrió, no `levels.entry` (que es
+// solo el nivel teórico del patrón, ver comentario en placeAutoOrder). Un
+// reintento corto: justo después de placeAutoOrder la posición puede tardar
+// una fracción de segundo en reflejarse en get_pending_positions.
+async function fetchRealEntryPrice(symbolPair) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 700));
+        const positions = await fetchOpenPositions().catch(() => []);
+        const pos = positions.find(p => p.symbol === symbolPair);
+        const price = pick(pos, 'avgPrice', 'openPrice', 'entryPrice', 'avgOpenPrice', 'openAvgPrice', 'price');
+        if (price != null) return Number(price);
+    }
+    return null;
 }
 
 async function fetchAvailableBalance() {
@@ -461,12 +489,20 @@ export async function tryAutoOpenPosition({ coin, levels, isBull, patternLabel, 
         // Solo para los scopes pedidos ('patrones' y 'patrones-1h-full') —
         // 'patrones-1h' queda excluido a propósito.
         if (TWEET_SCOPES.includes(scope)) {
+            // Los valores REALES con los que quedó la operación: el precio de
+            // entrada teórico del patrón (levels.entry) nunca fue el de
+            // ejecución (la orden es MARKET) y slStr/tp1Str son los que de
+            // verdad se mandaron a Bitunix (redondeados a la precisión del
+            // símbolo) — levels.sl/levels.tp1 traen más decimales de los que
+            // Bitunix aceptó. Si no se puede leer el precio real de la
+            // posición (lag de la API), se usa levels.entry como respaldo.
+            const realEntry = await fetchRealEntryPrice(symbolPair);
             await sendTradeOpenedTweet({
                 symbol:      symbolPair,
                 direction:   isBull ? 'LONG' : 'SHORT',
-                entry:       levels.entry,
-                stopLoss:    levels.sl,
-                takeProfit:  levels.tp1,
+                entry:       realEntry ?? levels.entry,
+                stopLoss:    Number(slStr),
+                takeProfit:  Number(tp1Str),
                 leverage:    order.leverage,
             });
         }

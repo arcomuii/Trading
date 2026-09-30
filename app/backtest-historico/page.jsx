@@ -443,6 +443,16 @@ function fmtDate(ms) {
     if (ms == null) return '—'
     return new Date(ms).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' })
 }
+// Solo para "Apertura" (entryTime) — antepone el día de la semana abreviado
+// (Lun, Mar, Mié...) a lo que ya arma fmtDate. "Cierre" (exitTime) sigue
+// usando fmtDate a secas, no se pidió ahí.
+function fmtDateWithDay(ms) {
+    if (ms == null) return '—'
+    const d = new Date(ms)
+    const day = d.toLocaleDateString('es-MX', { weekday: 'short', timeZone: 'America/Mexico_City' })
+        .replace(/^\w/, c => c.toUpperCase())
+    return `${day}, ${fmtDate(ms)}`
+}
 function fmtDay(ms) {
     if (ms == null) return '—'
     return new Date(ms).toLocaleDateString('es-MX', { dateStyle: 'medium', timeZone: 'America/Mexico_City' })
@@ -1046,7 +1056,7 @@ export default function BacktestHistoricoPage() {
                                                 {t.isBull ? 'LONG' : 'SHORT'}
                                             </span>
                                         </td>
-                                        <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(t.entryTime)}</td>
+                                        <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDateWithDay(t.entryTime)}</td>
                                         <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{t.entry?.toFixed(6)}</td>
                                         <td className="py-1 pr-3 text-red-500">{t.sl?.toFixed(6)}</td>
                                         <td className="py-1 pr-3 text-green-600">{t.tp1?.toFixed(6)}</td>
@@ -1086,7 +1096,7 @@ export default function BacktestHistoricoPage() {
                                 {[...skipped].sort((a, b) => (a.entryTime ?? 0) - (b.entryTime ?? 0)).map((t, i) => (
                                     <tr key={i} className="border-b border-gray-50 dark:border-slate-800/60">
                                         <td className="py-1 pr-3 font-semibold text-gray-700 dark:text-slate-200">{t.symbol}</td>
-                                        <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(t.entryTime)}</td>
+                                        <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDateWithDay(t.entryTime)}</td>
                                         <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">${t.wouldNeedCapital?.toFixed(2)}</td>
                                         <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">${t.availableAtTime?.toFixed(2)}</td>
                                         <td className="py-1 pr-3">
@@ -1159,7 +1169,7 @@ export default function BacktestHistoricoPage() {
                                     <td className="py-1.5 pr-3 text-red-500">{t.sl?.toFixed(6)}</td>
                                     <td className="py-1.5 pr-3 text-green-600">{t.tp1?.toFixed(6)}</td>
                                     <td className="py-1.5 pr-3 text-gray-500 dark:text-slate-400">{t.rr?.toFixed(2)}</td>
-                                    <td className="py-1.5 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(t.entryTime)}</td>
+                                    <td className="py-1.5 pr-3 text-gray-500 dark:text-slate-400">{fmtDateWithDay(t.entryTime)}</td>
                                     <td className="py-1.5 pr-3 text-gray-500 dark:text-slate-400">{t.outcome === 'open' ? 'Sin cerrar' : fmtDate(t.exitTime)}</td>
                                     <td className="py-1.5 pr-3">
                                         <span className={`px-2 py-0.5 rounded-full font-medium ${

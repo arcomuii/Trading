@@ -360,7 +360,7 @@ function hasFvgInRange(candles, fromIdx, toIdx, isBull) {
 // ── Motor principal ──────────────────────────────────────────────────────
 // candles: velas de la temporalidad elegida (5m/15m/1H). Devuelve
 // operativas SIN symbol/capital — misma forma que antes (entryTime,
-// exitTime, pct, outcome...) para que applyVolumeCompounding() las procese
+// exitTime, pct, outcome...) para que applyFixedVolume() las procese
 // igual.
 export function findSmcTrades(candles) {
     if (candles.length < MIN_CANDLES) return []
