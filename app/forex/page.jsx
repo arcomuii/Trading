@@ -674,7 +674,11 @@ export default function ForexBotPage() {
                                                 <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.size ?? '—'}</td>
                                                 <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{fmtPrice(p.entry)}</td>
                                                 <td className="py-1 pr-3 text-gray-600 dark:text-slate-300">{fmtPrice(p.exit)}</td>
-                                                <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{fmtDate(p.openedAt)}</td>
+                                                <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">
+                                                    {p.openedBeforeRange ? (
+                                                        <span title="La apertura pasó antes del rango de días pedido — solo se ve el cierre.">antes del rango</span>
+                                                    ) : fmtDate(p.openedAt)}
+                                                </td>
                                                 <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.closedAt ? fmtDate(p.closedAt) : '—'}</td>
                                                 <td className="py-1 pr-3 text-gray-500 dark:text-slate-400">{p.closedBy ?? '—'}</td>
                                                 <td className="py-1 pr-3">

@@ -69,9 +69,21 @@ async function convertToUsd(origin, pnl, pnlCcy, baseCcy, exitPrice, rateCache) 
     return rate ? pnl / rate : null
 }
 
-// Agrupa eventos POSITION por dealId en pares abrir/cerrar. La mayoría de
-// las posiciones tienen exactamente 2 eventos (abrir + cerrar); si solo hay
-// uno, sigue abierta (o el rango de días no alcanzó a cubrir su cierre).
+// Agrupa eventos POSITION por dealId en apertura/cierre. NO se puede asumir
+// "el primer evento cronológico es la apertura": si la apertura real quedó
+// FUERA del rango de días pedido pero el cierre SÍ cae adentro (posición que
+// abrió antes de la ventana y cerró dentro de ella), en los eventos que
+// devuelve la API para ese rango solo aparece el cierre — tomarlo como si
+// fuera la apertura mostraría una posición YA CERRADA (y hasta ganadora)
+// como si siguiera abierta, con la dirección al revés. Bug real encontrado
+// hoy con una operativa de AUDUSD que abrió un día antes del rango de "7
+// días" pedido.
+//
+// La forma confiable de distinguir un evento de cierre de uno de apertura
+// (verificado contra la API real): el de CIERRE siempre trae
+// `details.openPrice` (el precio al que se abrió, de referencia) — el de
+// APERTURA nunca lo trae. Con eso alcanza sin importar el orden ni cuántos
+// eventos se vean.
 function buildPositions(activities) {
     const positionEvents = activities.filter(a => a.type === 'POSITION').sort((a, b) => a.dateUTC.localeCompare(b.dateUTC))
     const byDeal = new Map()
@@ -82,47 +94,53 @@ function buildPositions(activities) {
 
     const positions = []
     for (const [dealId, events] of byDeal) {
-        const open = events[0]
-        const close = events.length > 1 ? events[events.length - 1] : null
-        const od = open.details || {}
-        const cd = close?.details || {}
-        const entry = od.level ?? od.openPrice ?? null
-        const exit = cd.level ?? null
-        const size = od.size ?? null
-        const isBull = od.direction === 'BUY'
+        const openEvent  = events.find(e => (e.details?.openPrice ?? null) == null) ?? null
+        const closeEvent = events.find(e => (e.details?.openPrice ?? null) != null) ?? null
+        if (!openEvent && !closeEvent) continue // no debería pasar, pero por seguridad no revienta
+
+        const od = openEvent?.details ?? {}
+        const cd = closeEvent?.details ?? {}
+        const epic = (openEvent ?? closeEvent).epic
+
+        // Si no hay openEvent, la apertura quedó fuera del rango pedido —
+        // se reconstruye con lo que trae el cierre (openPrice = entrada) y
+        // se marca `openedBeforeRange` para que la UI lo deje claro. La
+        // dirección del cierre es la CONTRARIA a la de la apertura original.
+        const entry = openEvent ? (od.level ?? null) : (cd.openPrice ?? null)
+        const size = od.size ?? cd.size ?? null
+        const isBull = openEvent ? od.direction === 'BUY' : cd.direction !== 'BUY'
+        const exit = closeEvent ? (cd.level ?? null) : null
+
         let outcome = null, pnl = null
-        if (close && entry != null && exit != null) {
+        if (entry != null && exit != null) {
             const diff = isBull ? exit - entry : entry - exit
             outcome = diff >= 0 ? 'win' : 'loss'
             // P&L en la divisa de COTIZACIÓN del par (últimas 3 letras del
-            // epic) — NO convertido a USD. Mismo criterio/simplificación ya
-            // documentada en app/lib/forexCapital.js: para EURUSD/GBPUSD/
-            // AUDUSD la cotización YA es USD, así que sale correcto tal cual;
-            // para USDJPY/USDCHF/GBPJPY sale en JPY/CHF/JPY respectivamente,
-            // no en USD (convertir exigiría la tasa cruzada de cada momento,
-            // que no se pide/guarda acá) — por eso se etiqueta con la
-            // divisa real (`pnlCcy`) en vez de asumir que todo es USD.
+            // epic) — convertido a USD aparte en convertToUsd(), ver abajo.
             if (size != null) pnl = diff * size
         }
+
         positions.push({
             dealId,
-            epic: open.epic,
+            epic,
             isBull,
             size,
             entry,
             exit,
             stopLevel: od.stopLevel ?? cd.stopLevel ?? null,
             profitLevel: od.profitLevel ?? cd.profitLevel ?? null,
-            openedAt: open.dateUTC,
-            closedAt: close?.dateUTC ?? null,
-            closedBy: close?.source ?? null, // 'SL' | 'TP' | 'USER' (cierre manual o del bot, incl. el forzado de las 12PM NY) | null = sigue abierta
-            outcome, // 'win' | 'loss' | null (sigue abierta)
+            openedAt: openEvent?.dateUTC ?? null, // null = la apertura quedó fuera del rango pedido (ver openedBeforeRange)
+            openedBeforeRange: !openEvent && !!closeEvent,
+            closedAt: closeEvent?.dateUTC ?? null,
+            closedBy: closeEvent?.source ?? null, // 'SL' | 'TP' | 'USER' (cierre manual o del bot, incl. el forzado de las 12PM NY) | null = sigue abierta de verdad
+            outcome, // 'win' | 'loss' | null (sigue abierta de verdad)
             pnl,
-            pnlCcy: open.epic ? open.epic.slice(3) : null, // divisa de cotización — ver nota arriba
-            baseCcy: open.epic ? open.epic.slice(0, 3) : null,
+            pnlCcy: epic ? epic.slice(3) : null, // divisa de cotización
+            baseCcy: epic ? epic.slice(0, 3) : null,
         })
     }
-    return positions.sort((a, b) => b.openedAt.localeCompare(a.openedAt)) // más reciente primero
+    // Ordena por el timestamp más reciente que se tenga (cierre si existe, si no apertura).
+    return positions.sort((a, b) => (b.closedAt ?? b.openedAt ?? '').localeCompare(a.closedAt ?? a.openedAt ?? ''))
 }
 
 export async function GET(request) {
