@@ -560,6 +560,11 @@ export default function DashboardPage() {
     const [lastFetch,       setLastFetch]        = useState(null)
     const [equityRangeDays, setEquityRangeDays]  = useState(30)
     const [pnlRangeDays,    setPnlRangeDays]     = useState(30)
+    const [serverIp,        setServerIp]         = useState(null)
+
+    useEffect(() => {
+        fetch('/api/server-ip').then(r => r.json()).then(j => setServerIp(j.ip)).catch(() => {})
+    }, [])
 
     useEffect(() => {
         const run = async () => {
@@ -676,6 +681,11 @@ export default function DashboardPage() {
                 <div className="flex items-end justify-between gap-4 flex-wrap">
                     <div>
                         <h1 className="text-3xl font-bold text-gray-800 dark:text-slate-100">Dashboard</h1>
+                        {serverIp && (
+                            <p className="text-gray-300 dark:text-slate-600 text-xs font-mono mt-0.5">
+                                Servidor: {serverIp}
+                            </p>
+                        )}
                         <p className="text-gray-400 dark:text-slate-500 text-sm mt-0.5">
                             Bitunix Futures · actualiza cada 1 min
                             {lastFetch && (
