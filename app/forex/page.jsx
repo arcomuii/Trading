@@ -56,6 +56,34 @@ function fmtDate(iso) {
     return new Date(iso).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' }) + ' CDMX'
 }
 
+// 'YYYY-MM-DD' en hora de Ciudad de México (UTC-6, sin horario de verano
+// desde 2022) — 'en-CA' da ese formato directo sin tener que armarlo a mano.
+// Usado para las tarjetas de P&L por período (hoy/ayer/semana/mes): cada
+// operativa cuenta para el día en que CERRÓ (closedAt), no en el que abrió,
+// y siempre en el calendario de CDMX, igual que el resto de esta página.
+function cdmxDateStr(iso) {
+    if (!iso) return null
+    return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' })
+}
+
+// Suma pnlUsd de las posiciones CERRADAS (del historial real, ver
+// app/api/forex-bot/history/route.js) cuyo día de cierre (CDMX) cae en
+// [fromDateStr, toDateStr] — ambos inclusive, mismo formato 'YYYY-MM-DD' que
+// cdmxDateStr. Devuelve también cuántas entraron y cuántas no se pudieron
+// convertir a USD (ver pnlUsd/missingUsd en el endpoint), para no mostrar un
+// total silenciosamente incompleto.
+function pnlForRange(positions, fromDateStr, toDateStr) {
+    let total = 0, count = 0, missing = 0
+    for (const p of positions) {
+        const d = cdmxDateStr(p.closedAt)
+        if (!d || d < fromDateStr || d > toDateStr) continue
+        count++
+        if (p.pnlUsd == null) missing++
+        else total += p.pnlUsd
+    }
+    return { total, count, missing }
+}
+
 // Lunes (ISO) de la semana a la que pertenece `dateStr` — para agrupar
 // dailyCapital en semanas y armar el reporte de "cada viernes".
 function isoWeekStart(dateStr) {
@@ -91,6 +119,18 @@ function buildDailyPnl(dailyCapital, days) {
         out.push({ date: recent[i].date, pnl: recent[i].balance - recent[i - 1].balance })
     }
     return out
+}
+
+// Mismos snapshots diarios (dailyCapital) que usa buildDailyPnl/buildWeeklyReports,
+// pero sin convertir a diferencias — para el AreaChart de "Historial de equity"
+// (balance real de la cuenta día a día, igual que en app/dashboard/page.jsx).
+function buildEquitySeries(dailyCapital, days) {
+    if (!dailyCapital?.length) return []
+    const cutoff = Date.now() - days * 86_400_000
+    return dailyCapital
+        .filter(d => new Date(d.date + 'T00:00:00Z').getTime() >= cutoff)
+        .map(d => ({ date: d.date, equity: d.balance }))
+        .sort((a, b) => a.date.localeCompare(b.date))
 }
 
 // ── SVG Bar Chart — copiado tal cual de app/dashboard/page.jsx (BarChart) ──
@@ -188,12 +228,109 @@ function BarChart({ data }) {
     )
 }
 
+// ── SVG Area Chart — copiado tal cual de app/dashboard/page.jsx (AreaChart)
+// para que "Historial de equity" se vea y se comporte igual en ambas páginas.
+function AreaChart({ data }) {
+    const [hoverIdx, setHoverIdx] = useState(null)
+
+    if (!data || data.length < 2) return (
+        <div className="h-48 flex items-center justify-center text-sm text-gray-300 dark:text-slate-600">
+            Acumulando historial...
+        </div>
+    )
+    const W = 900, H = 200
+    const p = { t: 16, r: 20, b: 36, l: 64 }
+    const cW = W - p.l - p.r
+    const cH = H - p.t - p.b
+
+    const vals  = data.map(d => d.equity)
+    const minV  = Math.min(...vals)
+    const maxV  = Math.max(...vals)
+    const range = maxV - minV || 1
+    const xOf   = i => p.l + (i / (data.length - 1)) * cW
+    const yOf   = v => p.t + (1 - (v - minV) / range) * cH
+
+    const pts  = data.map((d, i) => `${xOf(i).toFixed(1)},${yOf(d.equity).toFixed(1)}`)
+    const line = 'M ' + pts.join(' L ')
+    const area = `${line} L ${xOf(data.length - 1).toFixed(1)},${(p.t + cH).toFixed(1)} L ${xOf(0).toFixed(1)},${(p.t + cH).toFixed(1)} Z`
+
+    const yTicks = Array.from({ length: 5 }, (_, i) => minV + (i / 4) * range)
+    const lc     = Math.min(7, data.length)
+    const lIdx   = lc < 2
+        ? [0]
+        : Array.from({ length: lc }, (_, i) => Math.round(i / (lc - 1) * (data.length - 1)))
+
+    return (
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 200, overflow: 'visible' }}>
+            <defs>
+                <linearGradient id="ag-forex" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--chart-line)" stopOpacity="0.22" />
+                    <stop offset="100%" stopColor="var(--chart-line)" stopOpacity="0" />
+                </linearGradient>
+            </defs>
+            {yTicks.map((t, i) => (
+                <g key={i}>
+                    <line x1={p.l} x2={p.l + cW} y1={yOf(t)} y2={yOf(t)} stroke="var(--chart-grid)" strokeWidth="1" />
+                    <text x={p.l - 8} y={yOf(t) + 4} textAnchor="end" fontSize="11" fill="var(--chart-axis)">
+                        {fmt(t, 0)}
+                    </text>
+                </g>
+            ))}
+            <path d={area} fill="url(#ag-forex)" />
+            <path d={line} fill="none" stroke="var(--chart-line)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            {lIdx.map(i => (
+                <g key={i}>
+                    <circle cx={xOf(i)} cy={yOf(data[i].equity)} r="4.5" fill="var(--chart-grid)" stroke="var(--chart-line)" strokeWidth="2" />
+                    <text x={xOf(i)} y={p.t + cH + 24} textAnchor="middle" fontSize="11" fill="var(--chart-axis)">
+                        {data[i].date.slice(5)}
+                    </text>
+                </g>
+            ))}
+            {hoverIdx != null && (
+                <circle cx={xOf(hoverIdx)} cy={yOf(data[hoverIdx].equity)} r="5.5"
+                        fill="var(--chart-line)" stroke="#fff" strokeWidth="1.5" />
+            )}
+            {/* Zonas invisibles de hover — una por punto, cada una hasta el punto
+                medio con su vecino, de todo el alto del chart. */}
+            {data.map((_, i) => {
+                const prevMid = i === 0 ? p.l : (xOf(i - 1) + xOf(i)) / 2
+                const nextMid = i === data.length - 1 ? p.l + cW : (xOf(i) + xOf(i + 1)) / 2
+                return (
+                    <rect key={i} x={prevMid} y={p.t} width={Math.max(nextMid - prevMid, 0.01)} height={cH}
+                          fill="transparent" style={{ cursor: 'pointer' }}
+                          onMouseEnter={() => setHoverIdx(i)}
+                          onMouseLeave={() => setHoverIdx(null)} />
+                )
+            })}
+            {hoverIdx != null && (() => {
+                const d      = data[hoverIdx]
+                const x      = xOf(hoverIdx)
+                const label  = `${d.date}  ${fmt(d.equity, 2)}`
+                const boxW   = 18 + label.length * 5.6
+                const boxH   = 22
+                const boxX   = Math.min(Math.max(x - boxW / 2, p.l), p.l + cW - boxW)
+                const boxY   = 2
+                return (
+                    <g pointerEvents="none">
+                        <rect x={boxX} y={boxY} width={boxW} height={boxH} rx="4"
+                              fill="var(--chart-tooltip-bg, #1f2937)" opacity="0.95" />
+                        <text x={boxX + boxW / 2} y={boxY + boxH / 2 + 4} textAnchor="middle" fontSize="13" fontWeight="600" fill="#f3f4f6">
+                            {d.date}  <tspan fill="#93c5fd">{fmt(d.equity, 2)}</tspan>
+                        </text>
+                    </g>
+                )
+            })()}
+        </svg>
+    )
+}
+
 export default function ForexBotPage() {
     const [data, setData] = useState(null)
     const [error, setError] = useState(null)
     const [descOpen, setDescOpen] = useState(true) // descripción de la estrategia (h1/p) — colapsable, pedido explícito, abierta por defecto
     const [activeTab, setActiveTab] = useState(PAIRS[0])
     const [chartDays, setChartDays] = useState(30)
+    const [equityRangeDays, setEquityRangeDays] = useState(30)
     const [toggling, setToggling] = useState(null)
     const [maxPosDraft, setMaxPosDraft] = useState(null) // valor en edición del input — null = todavía no se tocó, se muestra el del servidor
     const [savingMaxPos, setSavingMaxPos] = useState(false)
@@ -205,10 +342,12 @@ export default function ForexBotPage() {
     // Historial REAL de posiciones (Capital.com, ver app/api/forex-bot/history/route.js)
     // — distinto de state.trades (lo que el bot CREE que abrió/cerró): este
     // viene directo de la cuenta, incluye operativas manuales, y no depende
-    // de que reconcile() haya reconocido bien cada una. Se carga a demanda
-    // (botón), NO en el poll de 20s de arriba — recorre un día a la vez
-    // contra Capital.com (límite real de su API) y con 30 días son ~30
-    // requests secuenciales, demasiado lento/pesado para repetir cada 20s.
+    // de que reconcile() haya reconocido bien cada una. Recorre un día a la
+    // vez contra Capital.com (límite real de su API), así que con 30 días
+    // son ~30 requests secuenciales — demasiado lento/pesado para el poll de
+    // 20s de arriba, por eso tiene su propio intervalo de 5 minutos (ver
+    // useEffect de abajo) en vez de compartir el de `load()`. El botón
+    // "↻ Recargar" sigue disponible para forzarlo antes de que toque.
     const [history, setHistory] = useState(null)
     const [historyLoading, setHistoryLoading] = useState(false)
     const [historyError, setHistoryError] = useState(null)
@@ -246,6 +385,16 @@ export default function ForexBotPage() {
         const id = setInterval(load, POLL_MS)
         return () => clearInterval(id)
     }, [])
+
+    // Pedido explícito del usuario: TODO se refresca solo, sin tener que
+    // reabrir la página — el estado del bot/cuenta ya corre cada 20s (arriba),
+    // así que aquí solo falta el historial real de Capital.com, que se
+    // actualiza solo cada 5 minutos (y de nuevo si cambia el rango de días).
+    useEffect(() => {
+        loadHistory(historyDays)
+        const id = setInterval(() => loadHistory(historyDays), 5 * 60 * 1000)
+        return () => clearInterval(id)
+    }, [historyDays])
 
     const toggle = async (symbol, enabled) => {
         setToggling(symbol)
@@ -315,13 +464,10 @@ export default function ForexBotPage() {
 
     const activeTrades = tradesFor(activeTab)
     const activeOpen = openFor(activeTab)
-    const wins = activeTrades.filter(t => t.outcome === 'win').length
-    const losses = activeTrades.filter(t => t.outcome === 'loss').length
-    const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : null
-    const totalPnl = activeTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
     const weeklyReports = buildWeeklyReports(state.dailyCapital)
     const dailyPnl = buildDailyPnl(state.dailyCapital, chartDays)
+    const equitySeries = buildEquitySeries(state.dailyCapital, equityRangeDays)
 
     return (
         <div className="p-6 space-y-6">
@@ -380,7 +526,7 @@ export default function ForexBotPage() {
                     <div className="text-[10px] text-gray-400 dark:text-slate-500 mt-1 mb-2">en TODA la cuenta (propias del bot o no)</div>
                     <div className="flex items-center gap-1.5">
                         <input
-                            type="number" min={1} max={6} step={1}
+                            type="number" min={1} max={10} step={1}
                             value={maxPosDraft ?? state.maxConcurrentPositions ?? 1}
                             onChange={e => setMaxPosDraft(e.target.value)}
                             title="Con ~$10 de capital, cada operativa adicional simultánea compromete más margen a la vez — subir este número aumenta el riesgo de quedarse sin capital disponible."
@@ -469,25 +615,6 @@ export default function ForexBotPage() {
                     >
                         {orderSizeSaved ? '✓ Guardado' : 'Guardar'}
                     </button>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
-                        <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Operativas cerradas</div>
-                        <div className="text-xl font-semibold text-gray-800 dark:text-slate-100">{activeTrades.length}</div>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
-                        <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Ganadas / Perdidas</div>
-                        <div className="text-xl font-semibold"><span className="text-green-600 dark:text-green-400">{wins}</span> <span className='dark:text-slate-100'>/</span> <span className="text-red-500 dark:text-red-400">{losses}</span></div>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
-                        <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">Win rate</div>
-                        <div className="text-xl font-semibold text-gray-800 dark:text-slate-100">{winRate != null ? `${winRate.toFixed(1)}%` : '—'}</div>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
-                        <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">P&L acumulado</div>
-                        <div className={`text-xl font-semibold ${totalPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>{fmtMoney(totalPnl)}</div>
-                    </div>
                 </div>
 
                 {/* Operativas abiertas/pendientes de este par */}
@@ -583,10 +710,6 @@ export default function ForexBotPage() {
                         </div>
                     </div>
                 )}
-
-                {activeOpen.length === 0 && activeTrades.length === 0 && (
-                    <p className="text-sm text-gray-400 dark:text-slate-500">Todavía no hay operativas para este par.</p>
-                )}
             </div>
 
             {/* ── Historial REAL de posiciones (Capital.com) — todos los pares, incluye
@@ -625,8 +748,34 @@ export default function ForexBotPage() {
                 {!history && !historyLoading && !historyError && (
                     <p className="text-sm text-gray-400 dark:text-slate-500">Sin cargar todavía.</p>
                 )}
-                {history && (
-                    <>
+                {history && (() => {
+                    const todayStr = cdmxDateStr(new Date().toISOString())
+                    const yesterdayStr = cdmxDateStr(new Date(Date.now() - 86_400_000).toISOString())
+                    const weekStartStr = isoWeekStart(todayStr)
+                    const monthStartStr = todayStr.slice(0, 7) + '-01'
+                    const earliestCoveredStr = cdmxDateStr(new Date(Date.now() - (history.days - 1) * 86_400_000).toISOString())
+                    const periods = [
+                        { label: 'P&L de hoy',          ...pnlForRange(history.positions, todayStr, todayStr) },
+                        { label: 'P&L de ayer',          ...pnlForRange(history.positions, yesterdayStr, yesterdayStr) },
+                        { label: 'P&L esta semana',      ...pnlForRange(history.positions, weekStartStr, todayStr), incomplete: weekStartStr < earliestCoveredStr },
+                        { label: 'P&L este mes',         ...pnlForRange(history.positions, monthStartStr, todayStr), incomplete: monthStartStr < earliestCoveredStr },
+                    ]
+                    return (
+                        <>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                            {periods.map(p => (
+                                <div key={p.label} className="bg-gray-50 dark:bg-slate-900 rounded-lg p-3">
+                                    <div className="text-xs text-gray-400 dark:text-slate-500 mb-1">{p.label}</div>
+                                    <div className={`text-lg font-bold ${p.total >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                                        {fmtMoney(p.total)}
+                                    </div>
+                                    <div className="text-[10px] text-gray-400 dark:text-slate-500 mt-0.5">
+                                        {p.count} operativa{p.count !== 1 ? 's' : ''}{p.missing > 0 ? ` · ${p.missing} sin convertir` : ''}
+                                        {p.incomplete && <span className="text-amber-500"> · incompleto, carga más días</span>}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                         <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500 dark:text-slate-400 mb-3">
                             <span>{history.summary.total} posición(es) en {history.days} días</span>
                             <span className="text-green-600 dark:text-green-400">{history.summary.wins} ganadora(s)</span>
@@ -699,8 +848,9 @@ export default function ForexBotPage() {
                                 </table>
                             </div>
                         )}
-                    </>
-                )}
+                        </>
+                    )
+                })()}
             </div>
 
             {/* ── Reporte semanal (viernes): capital al empezar vs al terminar cada semana ── */}
@@ -737,6 +887,39 @@ export default function ForexBotPage() {
                         </table>
                     </div>
                 )}
+            </div>
+
+            {/* ── Historial de equity — mismo AreaChart SVG que app/dashboard/page.jsx,
+                armado con los snapshots diarios de balance real (state.dailyCapital,
+                ver scripts/forex-bot.mjs) que ya alimentan el reporte semanal y el
+                BarChart de abajo. ── */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                    <div>
+                        <p className="text-sm font-semibold text-gray-700 dark:text-slate-200">Historial de equity</p>
+                        <p className="text-xs text-gray-400 dark:text-slate-500">Últimos {equityRangeDays} días · USD · balance real de la cuenta</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="flex rounded-lg border border-gray-200 dark:border-slate-700 overflow-hidden">
+                            {CHART_WINDOWS.map(days => (
+                                <button
+                                    key={days}
+                                    type="button"
+                                    onClick={() => setEquityRangeDays(days)}
+                                    className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                                        equityRangeDays === days
+                                            ? 'bg-gray-800 text-white dark:bg-slate-100 dark:text-slate-900'
+                                            : 'bg-white text-gray-500 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                                    }`}
+                                >
+                                    {days}d
+                                </button>
+                            ))}
+                        </div>
+                        <span className="text-xs font-mono text-gray-300 dark:text-slate-600">{equitySeries.length} registros</span>
+                    </div>
+                </div>
+                <AreaChart data={equitySeries} />
             </div>
 
             {/* ── Gráfica de P&L diario — mismo BarChart SVG que app/dashboard/page.jsx

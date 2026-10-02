@@ -308,12 +308,32 @@ async function reconcile(state, realPositions, realWorkingOrders) {
     const workingByDealId = new Map(realWorkingOrders.map(w => [dealIdOf(w), w]))
 
     // Órdenes pendientes: ¿ya son una posición? ¿ya no están en ningún lado?
+    //
+    // Confirmado 2026-09-30/10-01 contra la cuenta real: el match exacto por
+    // dealId (de abajo) puede fallar incluso cuando la orden SÍ se llenó —
+    // depende de que getConfirmation() haya devuelto el dealId real de la
+    // posición resultante, y eso no siempre llega a tiempo o con ese campo
+    // (varias posiciones reales quedaron marcadas "canceladas/rechazadas"
+    // en el log de ayer cuando en realidad existían en la cuenta — una de
+    // ellas, además, nunca llegó a cerrarse por el cierre forzado de las
+    // 12:00 PM NY precisamente porque el bot nunca la reconoció como
+    // propia). Respaldo: si no hay match por dealId pero SÍ existe una
+    // posición real del MISMO símbolo que todavía no está en
+    // openPositions, se asume que es el llenado de esta orden — con el
+    // cupo global de esta estrategia (una señal nueva por ciclo) nunca
+    // debería haber ambigüedad real entre dos pendingOrders del mismo símbolo.
+    const alreadyTrackedDealIds = new Set(state.openPositions.map(op => op.dealId))
     for (let i = state.pendingOrders.length - 1; i >= 0; i--) {
         const po = state.pendingOrders[i]
-        if (positionByDealId.has(po.dealId) || positionByDealId.has(po.workingOrderId)) {
-            const pos = (positionByDealId.get(po.dealId) ?? positionByDealId.get(po.workingOrderId)).position
+        let matched = positionByDealId.get(po.dealId) ?? positionByDealId.get(po.workingOrderId)
+        if (!matched) {
+            matched = realPositions.find(p => p.market?.epic === po.symbol && !alreadyTrackedDealIds.has(p.position.dealId))
+        }
+        if (matched) {
+            const pos = matched.position
             state.pendingOrders.splice(i, 1)
             state.openPositions.push({ ...po, dealId: pos.dealId, lastKnownUpl: pos.upl ?? 0, openedAt: new Date().toISOString() })
+            alreadyTrackedDealIds.add(pos.dealId)
             pushLog(state, 'info', `${po.symbol}: orden LLENADA — posición real abierta (dealId ${pos.dealId})`)
             continue
         }
@@ -368,6 +388,40 @@ async function reconcile(state, realPositions, realWorkingOrders) {
             outcome: pnl >= 0 ? 'win' : 'loss', pnl,
         })
         pushLog(state, 'info', `${op.symbol}: posición cerrada — ${pnl >= 0 ? 'GANADORA' : 'PERDEDORA'} (P&L≈$${pnl.toFixed(2)})`)
+    }
+
+    // Adopción de posiciones reales HUÉRFANAS — cualquier posición real que
+    // a esta altura (tras promover pendingOrders y revisar openPositions)
+    // siga sin estar en nuestro estado. Confirmado 2026-10-01: sin esto, una
+    // posición que se perdió del tracking por el problema de dealId de
+    // arriba (match exacto que falló, en un ciclo ANTERIOR a este fix) se
+    // queda huérfana para siempre — ni el cierre forzado de las 12:00 PM NY
+    // ni nada más vuelve a verla jamás, porque el bucle de arriba solo
+    // revisa pendingOrders, no TODAS las posiciones reales de la cuenta.
+    // Los datos (entry/sl/tp/size/openedAt) se toman directo de la posición
+    // real — son exactos, no una aproximación. `margin` queda null (no hay
+    // forma de reconstruir el margen exacto que se comprometió al abrirla
+    // sin volver a pedir marginFactor/baseCcy en este punto) — no afecta el
+    // cierre forzado ni el P&L, que ya se calculan con el `upl` real de Capital.com.
+    const trackedDealIds = new Set(state.openPositions.map(op => op.dealId))
+    for (const real of realPositions) {
+        const pos = real.position
+        if (trackedDealIds.has(pos.dealId)) continue
+        state.openPositions.push({
+            symbol: real.market?.epic ?? null,
+            dealId: pos.dealId,
+            isBull: pos.direction === 'BUY',
+            entry: pos.level ?? null,
+            sl: pos.stopLevel ?? null,
+            tp: pos.profitLevel ?? null,
+            size: pos.size ?? null,
+            margin: null,
+            openedAt: pos.createdDateUTC ? pos.createdDateUTC + 'Z' : new Date().toISOString(),
+            lastKnownUpl: pos.upl ?? 0,
+            lastKnownPrice: positionMidPrice(real.market),
+        })
+        trackedDealIds.add(pos.dealId)
+        pushLog(state, 'warn', `${real.market?.epic ?? '?'}: posición real huérfana adoptada al tracking (dealId ${pos.dealId}) — no se había reconocido como propia antes.`)
     }
 }
 

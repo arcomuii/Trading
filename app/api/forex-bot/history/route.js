@@ -20,6 +20,20 @@ const MAX_DAYS = 90 // techo de seguridad — 90 requests secuenciales ya es bas
 
 function dayStr(d) { return d.toISOString().slice(0, 10) }
 
+// `dateUTC` de Capital.com llega SIN sufijo de zona (ej.
+// "2026-09-30T13:48:57.407"), pese a su nombre — mismo hallazgo ya
+// documentado en app/lib/capitalMarket.js#parseSnapshotUtcMs:
+// `new Date(...)` sin 'Z' la interpreta como hora LOCAL del entorno que la
+// lee (el navegador del usuario), NO como UTC. Sin este fix, fmtDate() en
+// page.jsx mostraba los horarios desfasados (probado: 6h de más, el offset
+// de CDMX) porque el string ya se mal-interpretaba como local ANTES de que
+// fmtDate intentara convertirlo a CDMX. Se corrige acá, en el único lugar
+// que arma la respuesta — page.jsx no tiene que saber nada de este detalle.
+function toUtcIso(dateUTC) {
+    if (!dateUTC) return null
+    return dateUTC.endsWith('Z') ? dateUTC : dateUTC + 'Z'
+}
+
 async function fetchDayActivities(origin, dateStr) {
     const params = new URLSearchParams({ from: `${dateStr}T00:00:00`, to: `${dateStr}T23:59:59`, detailed: 'true' })
     const res = await fetch(`${origin}/api/capital/api/v1/history/activity?${params}`, { cache: 'no-store' })
@@ -129,9 +143,9 @@ function buildPositions(activities) {
             exit,
             stopLevel: od.stopLevel ?? cd.stopLevel ?? null,
             profitLevel: od.profitLevel ?? cd.profitLevel ?? null,
-            openedAt: openEvent?.dateUTC ?? null, // null = la apertura quedó fuera del rango pedido (ver openedBeforeRange)
+            openedAt: toUtcIso(openEvent?.dateUTC), // null = la apertura quedó fuera del rango pedido (ver openedBeforeRange)
             openedBeforeRange: !openEvent && !!closeEvent,
-            closedAt: closeEvent?.dateUTC ?? null,
+            closedAt: toUtcIso(closeEvent?.dateUTC),
             closedBy: closeEvent?.source ?? null, // 'SL' | 'TP' | 'USER' (cierre manual o del bot, incl. el forzado de las 12PM NY) | null = sigue abierta de verdad
             outcome, // 'win' | 'loss' | null (sigue abierta de verdad)
             pnl,

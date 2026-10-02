@@ -18,7 +18,7 @@ const STATE_FILE = path.join(DATA_DIR, 'forex-bot-state.json')
 export const PAIRS = ['EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'GBPJPY', 'USDCHF']
 export const DEFAULT_MAX_CONCURRENT_POSITIONS = 1 // ver la nota de gestión de capital en scripts/forex-bot.mjs — con ~$10 reales, 1 es lo prudente
 export const MIN_MAX_CONCURRENT_POSITIONS = 1
-export const MAX_MAX_CONCURRENT_POSITIONS = 6 // no tiene sentido pedir más que el número de pares
+export const MAX_MAX_CONCURRENT_POSITIONS = 10 // pedido explícito del usuario — con el motor de Barrido NY cada par puede dar hasta 2 operativas/día (una compra y una venta, ver usedHigh/usedLow en forexNySweepEngine.js), así que más de 6 (el número de pares) sí tiene sentido
 
 // Volumen (unidades de la divisa base) con el que el bot abre cada operativa
 // NUEVA de ese par — antes era ORDER_SIZE, una sola constante fija en
